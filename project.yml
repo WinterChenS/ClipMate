@@ -1,0 +1,55 @@
+name: PasteClone
+options:
+  bundleIdPrefix: com.pasteclone
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+  groupSortPosition: top
+
+settings:
+  base:
+    PRODUCT_NAME: PasteClone
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CODE_SIGN_STYLE: Automatic
+    COMBINE_HIDPI_IMAGES: YES
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    INFOPLIST_KEY_LSUIElement: YES
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: "6.24.0"
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: "2.0.0"
+
+targets:
+  PasteClone:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+      - path: Clipboard
+      - path: Storage
+      - path: UI
+      - path: HotKey
+      - path: Models
+      - path: Utils
+      - path: Resources
+    dependencies:
+      - package: GRDB
+      - package: KeyboardShortcuts
+    settings:
+      base:
+        INFOPLIST_FILE: Resources/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.pasteclone.app
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        ENABLE_HARDENED_RUNTIME: YES
+    entitlements:
+      path: Resources/PasteClone.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
