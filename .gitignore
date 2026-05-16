@@ -1,0 +1,71 @@
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/
+*.xcworkspace/xcuserdata/
+*.xcworkspace/xcshareddata/
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcuserstate
+*.xcscmblueprint
+
+# Swift Package Manager
+.build/
+.swiftpm/
+build/
+DerivedData/
+
+# XcodeGen
+*.xcodeproj/generated/
+
+# macOS
+.DS_Store
+*.swp
+*.swo
+*~
+.AppleDouble
+.LSOverride
+._*
+
+# Build artifacts
+*.o
+*.d
+*.dSYM/
+*.app
+*.dmg
+*.ipa
+*.framework
+*.dylib
+
+# Tuist / XcodeGen cache
+ Tuist/
+.graphite/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs
+*.log
+
+# .workbuddy (project metadata)
+.workbuddy/
+
+# Debug artifacts
+debug/
+release/
+artifacts/
+dmg-staging/
+
+# Build databases
+*.db
+build.db
