@@ -57,7 +57,7 @@ class UpdateChecker: ObservableObject {
     // MARK: - 配置
 
     /// GitHub 仓库所有者
-    private let repoOwner = "w1nterchen"
+    private let repoOwner = "WinterChenS"
     /// GitHub 仓库名
     private let repoName = "ClipMate"
     /// 检查间隔（秒），默认 24 小时
