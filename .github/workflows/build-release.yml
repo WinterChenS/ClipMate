@@ -204,13 +204,28 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
-      - name: Download all DMGs
+      - name: Download ARM DMG
         uses: actions/download-artifact@v4
         with:
-          path: ./artifacts/
+          name: ClipMate-ARM
+          path: ./artifacts/ClipMate-ARM
+
+      - name: Download Intel DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: ClipMate-Intel
+          path: ./artifacts/ClipMate-Intel
+
+      - name: Download Universal DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: ClipMate-Universal
+          path: ./artifacts/ClipMate-Universal
 
       - name: List artifacts
-        run: find ./artifacts -name "*.dmg" -exec ls -lh {} \;
+        run: |
+          echo "=== Downloaded artifacts ==="
+          find ./artifacts -type f -name "*.dmg" | while read f; do ls -lh "$f"; done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -236,6 +251,9 @@ jobs:
             ### 系统要求
 
             - macOS 14.0 (Sonoma) 或更高版本
-          files: ./artifacts/**/*.dmg
+          files: |
+            ./artifacts/ClipMate-ARM/*.dmg
+            ./artifacts/ClipMate-Intel/*.dmg
+            ./artifacts/ClipMate-Universal/*.dmg
           draft: false
           prerelease: false
