@@ -11,19 +11,8 @@ permissions:
 
 jobs:
   build:
-    name: Build DMG (${{ matrix.arch.label }})
-    runs-on: ${{ matrix.arch.runner }}
-    strategy:
-      matrix:
-        arch:
-          - label: Apple Silicon
-            arch_flag: arm64
-            suffix: ARM
-            runner: macos-14
-          - label: Intel
-            arch_flag: x86_64
-            suffix: Intel
-            runner: macos-13
+    name: Build ClipMate DMGs
+    runs-on: macos-14
 
     steps:
       - name: Checkout code
@@ -37,36 +26,43 @@ jobs:
       - name: Resolve dependencies
         run: xcrun swift package resolve
 
-      - name: Build Release
-        run: xcrun swift build -c release --arch ${{ matrix.arch.arch_flag }}
+      - name: Build ARM64
+        run: xcrun swift build -c release --arch arm64
 
-      - name: Verify binary
+      - name: Build x86_64
+        run: xcrun swift build -c release --arch x86_64
+
+      - name: Verify binaries
         run: |
-          BINARY=".build/${{ matrix.arch.arch_flag }}-apple-macosx/release/ClipMate"
-          if [[ ! -f "$BINARY" ]]; then
-            echo "::error::Binary not found at $BINARY"
-            exit 1
-          fi
-          file "$BINARY"
-          echo "BINARY_PATH=$BINARY" >> "$GITHUB_ENV"
+          echo "=== ARM64 ==="
+          file .build/arm64-apple-macosx/release/ClipMate
+          echo "=== x86_64 ==="
+          file .build/x86_64-apple-macosx/release/ClipMate
 
-      - name: Create .app bundle
+      - name: Create .app bundle + DMG for each architecture
         run: |
           APP_NAME="ClipMate"
           VERSION="1.0.0"
           BUILD_NUMBER="${{ github.run_number }}"
           MACOS_MIN="14.0"
-          BUNDLE_DIR=".build/${APP_NAME}.app"
+          BUNDLE_ID="com.clipmate.app"
 
-          mkdir -p "${BUNDLE_DIR}/Contents/MacOS"
-          mkdir -p "${BUNDLE_DIR}/Contents/Resources"
+          # ---- Helper: create .app for a given binary ----
+          create_app() {
+            local arch_label="$1"
+            local binary_path="$2"
+            local bundle_dir=".build/${APP_NAME}-${arch_label}.app"
 
-          # Copy binary
-          cp "${BINARY_PATH}" "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}"
-          chmod +x "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}"
+            rm -rf "${bundle_dir}"
+            mkdir -p "${bundle_dir}/Contents/MacOS"
+            mkdir -p "${bundle_dir}/Contents/Resources"
 
-          # Generate Info.plist
-          cat > "${BUNDLE_DIR}/Contents/Info.plist" <<PLIST
+            # Copy binary
+            cp "${binary_path}" "${bundle_dir}/Contents/MacOS/${APP_NAME}"
+            chmod +x "${bundle_dir}/Contents/MacOS/${APP_NAME}"
+
+            # Generate Info.plist
+            cat > "${bundle_dir}/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -80,7 +76,7 @@ jobs:
               <key>CFBundleIconName</key>
               <string>AppIcon</string>
               <key>CFBundleIdentifier</key>
-              <string>com.clipmate.app</string>
+              <string>${BUNDLE_ID}</string>
               <key>CFBundleInfoDictionaryVersion</key>
               <string>6.0</string>
               <key>CFBundleName</key>
@@ -107,60 +103,98 @@ jobs:
           </plist>
           PLIST
 
-          # Copy entitlements (filtered - no iCloud)
-          if [[ -f "Resources/ClipMate.entitlements" ]]; then
-            cp "Resources/ClipMate.entitlements" "${BUNDLE_DIR}/Contents/Resources/${APP_NAME}.entitlements"
-          fi
+            # Copy entitlements
+            if [[ -f "Resources/ClipMate.entitlements" ]]; then
+              cp "Resources/ClipMate.entitlements" "${bundle_dir}/Contents/Resources/${APP_NAME}.entitlements"
+            fi
 
-          # Copy icon if available
-          if [[ -f "App/Resources/AppIcon.icns" ]]; then
-            cp "App/Resources/AppIcon.icns" "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns"
-          elif [[ -f "Resources/AppIcon.icns" ]]; then
-            cp "Resources/AppIcon.icns" "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns"
-          fi
+            # Copy icon
+            if [[ -f "App/Resources/AppIcon.icns" ]]; then
+              cp "App/Resources/AppIcon.icns" "${bundle_dir}/Contents/Resources/AppIcon.icns"
+            elif [[ -f "Resources/AppIcon.icns" ]]; then
+              cp "Resources/AppIcon.icns" "${bundle_dir}/Contents/Resources/AppIcon.icns"
+            fi
 
-      - name: Filter entitlements (remove iCloud)
-        run: |
-          ENTITLEMENTS=".build/ClipMate.app/Contents/Resources/ClipMate.entitlements"
-          if [[ -f "${ENTITLEMENTS}" ]]; then
-            /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.ubiquity-container-identifiers" "${ENTITLEMENTS}" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.ubiquity-kvstore-identifier" "${ENTITLEMENTS}" 2>/dev/null || true
-          fi
+            # Filter iCloud entitlements
+            local ent="${bundle_dir}/Contents/Resources/${APP_NAME}.entitlements"
+            if [[ -f "${ent}" ]]; then
+              /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.ubiquity-container-identifiers" "${ent}" 2>/dev/null || true
+              /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.ubiquity-kvstore-identifier" "${ent}" 2>/dev/null || true
+            fi
 
-      - name: Code sign (ad-hoc)
-        run: |
-          codesign --force --deep --sign - \
-            --options runtime \
-            ".build/ClipMate.app"
+            echo "${bundle_dir}"
+          }
 
-      - name: Create DMG
-        run: |
-          APP_NAME="ClipMate"
-          VERSION="1.0.0"
-          DMG_DIR=".build/dmg"
-          SUFFIX="${{ matrix.arch.suffix }}"
-          DMG_OUTPUT=".build/${APP_NAME}-${VERSION}-${SUFFIX}.dmg"
+          # ---- Build ARM .app ----
+          echo ">>> Creating ARM64 .app..."
+          ARM_APP=$(create_app "ARM" ".build/arm64-apple-macosx/release/ClipMate")
+          codesign --force --deep --sign - --options runtime "${ARM_APP}"
 
-          rm -rf "${DMG_DIR}"
-          mkdir -p "${DMG_DIR}"
-          cp -R ".build/${APP_NAME}.app" "${DMG_DIR}/"
-          ln -s /Applications "${DMG_DIR}/Applications"
+          # ---- Build Intel .app ----
+          echo ">>> Creating Intel .app..."
+          INTEL_APP=$(create_app "Intel" ".build/x86_64-apple-macosx/release/ClipMate")
+          codesign --force --deep --sign - --options runtime "${INTEL_APP}"
 
-          hdiutil create \
-            -volname "${APP_NAME}" \
-            -srcfolder "${DMG_DIR}" \
-            -ov \
-            -format UDZO \
-            "${DMG_OUTPUT}"
+          # ---- Build Universal .app ----
+          echo ">>> Creating Universal .app..."
+          UNIVERSAL_APP=".build/ClipMate-Universal.app"
+          cp -R "${ARM_APP}" "${UNIVERSAL_APP}"
+          lipo -create \
+            ".build/arm64-apple-macosx/release/ClipMate" \
+            ".build/x86_64-apple-macosx/release/ClipMate" \
+            -output "${UNIVERSAL_APP}/Contents/MacOS/${APP_NAME}"
+          codesign --force --deep --sign - --options runtime "${UNIVERSAL_APP}"
 
-          echo "DMG_PATH=${DMG_OUTPUT}" >> "$GITHUB_ENV"
-          echo "DMG_NAME=$(basename ${DMG_OUTPUT})" >> "$GITHUB_ENV"
+          # ---- Verify universal binary ----
+          echo "=== Universal binary archs ==="
+          lipo -archs "${UNIVERSAL_APP}/Contents/MacOS/${APP_NAME}"
 
-      - name: Upload DMG artifact
+          # ---- Create DMGs ----
+          create_dmg() {
+            local app_dir="$1"
+            local suffix="$2"
+            local dmg_output=".build/${APP_NAME}-${VERSION}-${suffix}.dmg"
+            local dmg_staging=".build/dmg-${suffix}"
+
+            rm -rf "${dmg_staging}"
+            mkdir -p "${dmg_staging}"
+            cp -R "${app_dir}" "${dmg_staging}/"
+            ln -s /Applications "${dmg_staging}/Applications"
+
+            hdiutil create \
+              -volname "${APP_NAME}" \
+              -srcfolder "${dmg_staging}" \
+              -ov \
+              -format UDZO \
+              "${dmg_output}"
+
+            echo "  ✅ ${dmg_output} ($(du -h "${dmg_output}" | cut -f1))"
+          }
+
+          echo ">>> Creating DMGs..."
+          create_dmg "${ARM_APP}" "ARM"
+          create_dmg "${INTEL_APP}" "Intel"
+          create_dmg "${UNIVERSAL_APP}" "Universal"
+
+      - name: Upload ARM DMG
         uses: actions/upload-artifact@v4
         with:
-          name: ClipMate-${{ matrix.arch.suffix }}
-          path: ${{ env.DMG_PATH }}
+          name: ClipMate-ARM
+          path: .build/ClipMate-*-ARM.dmg
+          retention-days: 90
+
+      - name: Upload Intel DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipMate-Intel
+          path: .build/ClipMate-*-Intel.dmg
+          retention-days: 90
+
+      - name: Upload Universal DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipMate-Universal
+          path: .build/ClipMate-*-Universal.dmg
           retention-days: 90
 
   release:
@@ -170,23 +204,13 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download ARM DMG
+      - name: Download all DMGs
         uses: actions/download-artifact@v4
         with:
-          name: ClipMate-ARM
-          path: ./artifacts/
-
-      - name: Download Intel DMG
-        uses: actions/download-artifact@v4
-        with:
-          name: ClipMate-Intel
           path: ./artifacts/
 
       - name: List artifacts
-        run: ls -lh ./artifacts/
+        run: find ./artifacts -name "*.dmg" -exec ls -lh {} \;
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -199,18 +223,19 @@ jobs:
 
             | 文件 | 架构 | 说明 |
             |------|------|------|
-            | `ClipMate-*-ARM.dmg` | Apple Silicon (M1/M2/M3/M4) | 适用于 M 系列芯片 Mac |
-            | `ClipMate-*-Intel.dmg` | Intel (x86_64) | 适用于 Intel 芯片 Mac |
+            | `ClipMate-*-Universal.dmg` | Universal (ARM + Intel) | **推荐** — 同时支持两种架构 |
+            | `ClipMate-*-ARM.dmg` | Apple Silicon (M1/M2/M3/M4) | 仅 M 系列芯片 |
+            | `ClipMate-*-Intel.dmg` | Intel (x86_64) | 仅 Intel 芯片 |
 
             ### 安装
 
-            1. 下载对应架构的 DMG 文件
+            1. 下载 DMG 文件（推荐 Universal 版本）
             2. 双击打开，拖拽 ClipMate 到 Applications 文件夹
             3. 首次运行需在 **系统设置 > 隐私与安全性 > 辅助功能** 中授权
 
             ### 系统要求
 
             - macOS 14.0 (Sonoma) 或更高版本
-          files: ./artifacts/*.dmg
+          files: ./artifacts/**/*.dmg
           draft: false
           prerelease: false
