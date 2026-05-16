@@ -468,22 +468,44 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func checkForUpdates() {
-        updateChecker?.forceCheck()
-        // 如果没有更新，显示提示
-        if let checker = updateChecker, !checker.updateAvailable {
-            // 延迟显示"已是最新版本"（等检查完成）
-            Task { @MainActor in
-                // 等待检查完成
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                if !checker.updateAvailable {
-                    let alert = NSAlert()
-                    alert.messageText = "ClipMate 已是最新版本"
-                    alert.informativeText = "当前版本: \(checker.currentVersion)"
+        guard let checker = updateChecker else { return }
+        checker.forceCheck()
+        // 监听检查结果，弹窗反馈（右键菜单触发，不在设置窗口内）
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            // 等待检查完成
+            for _ in 0..<30 {
+                if !checker.isChecking { break }
+                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+            }
+            let alert = NSAlert()
+            alert.window.level = .floating
+            switch checker.checkResult {
+            case .updateAvailable:
+                if let release = checker.latestRelease {
+                    alert.messageText = "发现新版本 ClipMate \(release.version)"
+                    alert.informativeText = "当前版本: \(checker.currentVersion)\n请前往关于页面下载更新。"
                     alert.alertStyle = .informational
-                    alert.addButton(withTitle: "好")
-                    alert.window.level = .floating
-                    alert.runModal()
+                    alert.addButton(withTitle: "下载更新")
+                    alert.addButton(withTitle: "稍后")
+                    if alert.runModal() == .alertFirstButtonReturn {
+                        checker.openDownloadPage()
+                    }
                 }
+            case .upToDate:
+                alert.messageText = "ClipMate 已是最新版本"
+                alert.informativeText = "当前版本: \(checker.currentVersion)"
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "好")
+                alert.runModal()
+            case .failed:
+                alert.messageText = "检查更新失败"
+                alert.informativeText = "无法连接到服务器，请检查网络连接后重试。"
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "好")
+                alert.runModal()
+            case .idle:
+                break
             }
         }
     }

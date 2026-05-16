@@ -21,12 +21,22 @@ class UpdateChecker: ObservableObject {
 
     // MARK: - 公开状态
 
+    /// 检查结果
+    enum CheckResult: Equatable {
+        case idle           // 未检查
+        case upToDate       // 已是最新版本
+        case updateAvailable // 有新版本
+        case failed         // 检查失败
+    }
+
     /// 是否有可用更新
     @Published var updateAvailable: Bool = false
     /// 最新版本信息
     @Published var latestRelease: ReleaseInfo?
     /// 是否正在检查
     @Published var isChecking: Bool = false
+    /// 检查结果
+    @Published var checkResult: CheckResult = .idle
     /// 错误信息（仅供调试，不展示给用户）
     @Published var lastError: String?
 
@@ -91,6 +101,7 @@ class UpdateChecker: ObservableObject {
 
         isChecking = true
         lastError = nil
+        checkResult = .idle
 
         let owner = repoOwner
         let repo = repoName
@@ -116,19 +127,22 @@ class UpdateChecker: ObservableObject {
                         print("[UpdateChecker] 用户已跳过版本 \(remoteVersion)")
                         self.updateAvailable = false
                         self.latestRelease = nil
+                        self.checkResult = .upToDate
                     } else {
                         self.latestRelease = release
                         self.updateAvailable = true
+                        self.checkResult = .updateAvailable
                     }
                 } else {
                     self.updateAvailable = false
                     self.latestRelease = nil
+                    self.checkResult = .upToDate
                 }
             } catch {
                 // 网络异常静默处理，绝不崩溃
                 print("[UpdateChecker] 检查更新失败: \(error.localizedDescription)")
                 self.lastError = error.localizedDescription
-                // 不修改 updateAvailable 状态，保持上一次结果
+                self.checkResult = .failed
             }
 
             self.isChecking = false

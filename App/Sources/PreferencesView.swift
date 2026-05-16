@@ -501,7 +501,7 @@ struct PreferencesView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-            // 检查更新按钮
+            // 检查更新
             HStack(spacing: 12) {
                 Button {
                     updateChecker.forceCheck()
@@ -517,11 +517,35 @@ struct PreferencesView: View {
                 }
                 .disabled(updateChecker.isChecking)
 
-                if updateChecker.updateAvailable, let release = updateChecker.latestRelease {
-                    Button("下载 v\(release.version)") {
-                        updateChecker.openDownloadPage()
+                // 检查结果反馈
+                switch updateChecker.checkResult {
+                case .idle:
+                    EmptyView()
+                case .upToDate:
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.system(size: 12))
+                        Text("已是最新版本")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
                     }
-                    .buttonStyle(.borderedProminent)
+                case .updateAvailable:
+                    if let release = updateChecker.latestRelease {
+                        Button("下载 v\(release.version)") {
+                            updateChecker.openDownloadPage()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                case .failed:
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundColor(.orange)
+                            .font(.system(size: 12))
+                        Text("检查失败")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 
