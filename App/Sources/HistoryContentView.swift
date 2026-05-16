@@ -111,6 +111,7 @@ struct HistoryContentView: View {
     @State private var renameText: String = ""
     @State private var pinboardToDelete: Pinboard? = nil
     @State private var previewItem: ClipboardItem?
+    @ObservedObject var updateChecker: UpdateChecker
 
     var onItemSelected: (ClipboardItem) -> Void
     var onPastePlainText: (ClipboardItem) -> Void
@@ -119,12 +120,14 @@ struct HistoryContentView: View {
     init(
         databaseManager: DatabaseManager,
         syncManager: ICloudDriveSyncManager? = nil,
+        updateChecker: UpdateChecker,
         onItemSelected: @escaping (ClipboardItem) -> Void,
         onPastePlainText: @escaping (ClipboardItem) -> Void,
         onClose: @escaping () -> Void
     ) {
         self.viewModel = HistoryViewModel(databaseManager: databaseManager)
         self.syncManager = syncManager
+        self.updateChecker = updateChecker
         self.onItemSelected = onItemSelected
         self.onPastePlainText = onPastePlainText
         self.onClose = onClose
@@ -180,6 +183,22 @@ struct HistoryContentView: View {
         .sheet(item: $previewItem) { item in
             ClipMatePreviewView(item: item)
                 .frame(minWidth: 500, minHeight: 400)
+        }
+        // 更新提醒
+        .alert("发现新版本", isPresented: $updateChecker.updateAvailable) {
+            Button("下载更新") {
+                updateChecker.openDownloadPage()
+            }
+            Button("不再提醒") {
+                updateChecker.skipCurrentUpdate()
+            }
+            Button("稍后", role: .cancel) {}
+        } message: {
+            if let release = updateChecker.latestRelease {
+                Text("ClipMate \(release.version) 已发布（当前 \(updateChecker.currentVersion)）")
+            } else {
+                Text("有新版本可用")
+            }
         }
     }
 
@@ -240,6 +259,14 @@ struct HistoryContentView: View {
                     NotificationCenter.default.post(name: .openPreferences, object: nil)
                 } label: {
                     Label("偏好设置...", systemImage: "gear")
+                }
+
+                Divider()
+
+                Button {
+                    updateChecker.forceCheck()
+                } label: {
+                    Label("检查更新...", systemImage: "arrow.down.circle")
                 }
 
                 Divider()
@@ -670,11 +697,9 @@ struct ClipMatePreviewView: View {
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
 
-                if let date = item.copiedAt {
-                    Text(date, style: .date)
+                Text(item.createdAt, style: .date)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                }
 
                 Button {
                     dismiss()
@@ -810,8 +835,8 @@ struct ClipMatePreviewView: View {
     }
 }
 
-// ClipboardItem.ContentType 的显示名称
-extension ClipboardItem.ContentType {
+// ClipboardContentType 的显示名称
+extension ClipboardContentType {
     var displayName: String {
         switch self {
         case .text: return "文本"

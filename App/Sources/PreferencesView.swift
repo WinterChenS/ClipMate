@@ -30,6 +30,7 @@ struct PreferencesView: View {
     // MARK: - 依赖
     let databaseManager: DatabaseManager
     var syncManager: ICloudDriveSyncManager?
+    @ObservedObject var updateChecker: UpdateChecker
 
     // MARK: - 同步设置
     @State private var syncEnabled: Bool = false
@@ -493,12 +494,36 @@ struct PreferencesView: View {
             Text("ClipMate")
                 .font(.title2.bold())
 
-            Text("版本 1.0.0")
+            Text("版本 \(updateChecker.currentVersion)")
                 .foregroundColor(.secondary)
 
             Text("一个高保真的 macOS 剪贴板管理器")
                 .font(.caption)
                 .foregroundColor(.secondary)
+
+            // 检查更新按钮
+            HStack(spacing: 12) {
+                Button {
+                    updateChecker.forceCheck()
+                } label: {
+                    HStack(spacing: 4) {
+                        if updateChecker.isChecking {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .frame(width: 14, height: 14)
+                        }
+                        Text(updateChecker.isChecking ? "检查中..." : "检查更新")
+                    }
+                }
+                .disabled(updateChecker.isChecking)
+
+                if updateChecker.updateAvailable, let release = updateChecker.latestRelease {
+                    Button("下载 v\(release.version)") {
+                        updateChecker.openDownloadPage()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
 
             Spacer()
 

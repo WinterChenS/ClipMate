@@ -22,6 +22,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var iCloudSyncManager: ICloudDriveSyncManager?
     /// 设置窗口
     private var preferencesWindow: NSWindow?
+    /// 版本更新检查器
+    private var updateChecker: UpdateChecker?
     /// 打开面板前的前台应用（用于粘贴后归还焦点）
     private var previousActiveApp: NSRunningApplication?
 
@@ -37,6 +39,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // 设置 Dock 图标（即使 LSUIElement=true，也要设置 applicationIconImage）
         setupDockIcon()
+
+        // 初始化版本更新检查器（必须在 setupHistoryPanel 之前）
+        updateChecker = UpdateChecker()
 
         setupStatusItem()
         startClipboardMonitoring()
@@ -66,6 +71,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let dbManager = databaseManager {
             iCloudSyncManager = ICloudDriveSyncManager(databaseManager: dbManager)
             print("[ClipMate] iCloud Drive 同步管理器已初始化")
+        }
+
+        // 延迟 3 秒后自动检查更新（避免影响启动速度）
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            updateChecker?.checkForUpdateIfNeeded()
         }
     }
 
@@ -146,6 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(NSMenuItem(title: "搜索...", action: #selector(focusSearch), keyEquivalent: "f"))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "偏好设置...", action: #selector(openPreferences), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "检查更新...", action: #selector(checkForUpdates), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit ClipMate", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
@@ -158,10 +170,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func setupHistoryPanel() {
         guard let dbManager = databaseManager else { return }
+        guard let checker = updateChecker else { return }
 
         let contentView = HistoryContentView(
             databaseManager: dbManager,
             syncManager: iCloudSyncManager,
+            updateChecker: checker,
             onItemSelected: { [weak self] item in
                 self?.pasteItem(item)
             },
@@ -427,7 +441,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 print("[ClipMate] ⚠️ 数据库未初始化，无法打开偏好设置")
                 return
             }
-            let preferencesView = PreferencesView(databaseManager: dbManager, syncManager: iCloudSyncManager)
+            let preferencesView = PreferencesView(databaseManager: dbManager, syncManager: iCloudSyncManager, updateChecker: updateChecker ?? UpdateChecker())
             preferencesWindow = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
                 styleMask: [.titled, .closable],
@@ -451,6 +465,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func focusSearch() {
         showHistoryPanel()
         NotificationCenter.default.post(name: .focusSearchField, object: nil, userInfo: nil)
+    }
+
+    @objc private func checkForUpdates() {
+        updateChecker?.forceCheck()
+        // 如果没有更新，显示提示
+        if let checker = updateChecker, !checker.updateAvailable {
+            // 延迟显示"已是最新版本"（等检查完成）
+            Task { @MainActor in
+                // 等待检查完成
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if !checker.updateAvailable {
+                    let alert = NSAlert()
+                    alert.messageText = "ClipMate 已是最新版本"
+                    alert.informativeText = "当前版本: \(checker.currentVersion)"
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "好")
+                    alert.window.level = .floating
+                    alert.runModal()
+                }
+            }
+        }
     }
 
     // MARK: - 辅助功能权限检测
