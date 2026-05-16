@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build ClipMate DMGs
+  build-and-release:
+    name: Build & Release ClipMate
     runs-on: macos-14
 
     steps:
@@ -20,7 +20,6 @@ jobs:
       - name: Extract version from tag
         id: version
         run: |
-          # tag 格式: v1.2.3 → VERSION=1.2.3
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
@@ -48,7 +47,7 @@ jobs:
           echo "=== x86_64 ==="
           file .build/x86_64-apple-macosx/release/ClipMate
 
-      - name: Create .app bundle + DMG for each architecture
+      - name: Package .app bundles and create DMGs
         run: |
           APP_NAME="ClipMate"
           VERSION="${{ steps.version.outputs.version }}"
@@ -71,7 +70,7 @@ jobs:
             chmod +x "${bundle_dir}/Contents/MacOS/${APP_NAME}"
 
             # Generate Info.plist
-            cat > "${bundle_dir}/Contents/Info.plist" <<PLIST
+            cat > "${bundle_dir}/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -110,7 +109,7 @@ jobs:
               <string>ClipMate needs accessibility permission to paste content into other apps.</string>
           </dict>
           </plist>
-          PLIST
+          EOF
 
             # Copy entitlements
             if [[ -f "Resources/ClipMate.entitlements" ]]; then
@@ -185,6 +184,11 @@ jobs:
           create_dmg "${INTEL_APP}" "Intel"
           create_dmg "${UNIVERSAL_APP}" "Universal"
 
+          # ---- List all DMGs ----
+          echo ""
+          echo "=== Build artifacts ==="
+          ls -lh .build/*.dmg
+
       - name: Upload ARM DMG
         uses: actions/upload-artifact@v4
         with:
@@ -206,36 +210,8 @@ jobs:
           path: .build/ClipMate-*-Universal.dmg
           retention-days: 90
 
-  release:
-    name: Create Release
-    needs: build
-    runs-on: macos-14
-
-    steps:
-      - name: Download ARM DMG
-        uses: actions/download-artifact@v4
-        with:
-          name: ClipMate-ARM
-          path: ./artifacts/ClipMate-ARM
-
-      - name: Download Intel DMG
-        uses: actions/download-artifact@v4
-        with:
-          name: ClipMate-Intel
-          path: ./artifacts/ClipMate-Intel
-
-      - name: Download Universal DMG
-        uses: actions/download-artifact@v4
-        with:
-          name: ClipMate-Universal
-          path: ./artifacts/ClipMate-Universal
-
-      - name: List artifacts
-        run: |
-          echo "=== Downloaded artifacts ==="
-          find ./artifacts -type f -name "*.dmg" | while read f; do ls -lh "$f"; done
-
       - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           name: ClipMate ${{ github.ref_name }}
@@ -260,8 +236,8 @@ jobs:
 
             - macOS 14.0 (Sonoma) 或更高版本
           files: |
-            ./artifacts/ClipMate-ARM/*.dmg
-            ./artifacts/ClipMate-Intel/*.dmg
-            ./artifacts/ClipMate-Universal/*.dmg
+            .build/ClipMate-*-ARM.dmg
+            .build/ClipMate-*-Intel.dmg
+            .build/ClipMate-*-Universal.dmg
           draft: false
           prerelease: false
