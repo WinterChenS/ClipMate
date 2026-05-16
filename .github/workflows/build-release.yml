@@ -17,6 +17,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Extract version from tag
+        id: version
+        run: |
+          # tag 格式: v1.2.3 → VERSION=1.2.3
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "📌 Tag: ${TAG}, Version: ${VERSION}"
+
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -41,7 +51,7 @@ jobs:
       - name: Create .app bundle + DMG for each architecture
         run: |
           APP_NAME="ClipMate"
-          VERSION="1.0.0"
+          VERSION="${{ steps.version.outputs.version }}"
           BUILD_NUMBER="${{ github.run_number }}"
           MACOS_MIN="14.0"
           BUNDLE_ID="com.clipmate.app"

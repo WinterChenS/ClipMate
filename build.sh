@@ -65,8 +65,22 @@ fi
 # ---- 配置 ----
 APP_NAME="ClipMate"
 BUNDLE_ID="com.clipmate.app"
-VERSION="1.0.0"
-BUILD_NUMBER="1"
+
+# 版本号：优先从 git tag 读取，否则回退到默认值
+if GIT_DESCRIBE=$(git describe --tags --exact-match 2>/dev/null); then
+    # 当前 commit 正好有 tag (如 v1.2.3)
+    VERSION="${GIT_DESCRIBE#v}"
+    BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo "1")
+elif GIT_DESCRIBE=$(git describe --tags --abbrev=0 2>/dev/null); then
+    # 有最近的 tag，当前 commit 在 tag 之后
+    VERSION="${GIT_DESCRIBE#v}-dev"
+    BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo "1")
+else
+    # 没有 tag
+    VERSION="0.1.0-dev"
+    BUILD_NUMBER="1"
+fi
+
 MACOS_MIN="14.0"
 SWIFT_MIN_MAJOR="6"
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
