@@ -11,7 +11,6 @@ struct PreferencesView: View {
     @AppStorage("showDockIcon") private var showDockIcon = false
     @AppStorage("maxHistoryDays") private var maxHistoryDays = 30
     @AppStorage("maxHistoryCount") private var maxHistoryCount = 1000
-    @AppStorage("showNotification") private var showNotification = true
     @AppStorage("autoCleanup") private var autoCleanup = true
 
     @State private var selectedSection: PreferencesSection = .general
@@ -64,12 +63,6 @@ struct PreferencesView: View {
                     }
             } header: {
                 Text("启动")
-            }
-
-            Section {
-                Toggle("复制成功时显示通知", isOn: $showNotification)
-            } header: {
-                Text("通知")
             }
 
             Section {

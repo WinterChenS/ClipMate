@@ -269,7 +269,6 @@ struct PasteCardGrid: View {
                             onPastePlainText: { onItemAction(item, .pastePlainText) },
                             onCopy: { onItemAction(item, .copy) },
                             onEdit: { onItemAction(item, .edit) },
-                            onRename: { onItemAction(item, .rename) },
                             onDelete: { onItemAction(item, .delete) },
                             onPin: { onItemAction(item, .pin) },
                             onPreview: { onItemAction(item, .preview) },
@@ -583,7 +582,6 @@ struct PasteCardContextMenu: View {
     let onPastePlainText: () -> Void
     let onCopy: () -> Void
     let onEdit: () -> Void
-    let onRename: () -> Void
     let onDelete: () -> Void
     let onPin: () -> Void
     let onPreview: () -> Void
@@ -612,10 +610,6 @@ struct PasteCardContextMenu: View {
         // ---- 编辑操作 ----
         Button(action: onEdit) {
             Label("编辑", systemImage: "pencil")
-        }
-
-        Button(action: onRename) {
-            Label("重命名", systemImage: "character.cursor.ibeam")
         }
 
         Button(action: onDelete) {
@@ -684,7 +678,6 @@ enum ItemAction {
     case copy
     case pastePlainText
     case edit
-    case rename
     case preview
     case share
     case pinToBoard(Pinboard)

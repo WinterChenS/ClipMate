@@ -88,12 +88,7 @@ BUILD_DIR="${PROJECT_DIR}/.build"
 RELEASE_DIR="${BUILD_DIR}/release"
 BUNDLE_DIR="${BUILD_DIR}/${APP_NAME}.app"
 DMG_DIR="${BUILD_DIR}/dmg"
-# DMG 文件名包含架构标识
-case "${BUILD_ARCH}" in
-    universal) DMG_OUTPUT="${BUILD_DIR}/${APP_NAME}-${VERSION}-Universal.dmg" ;;
-    arm64)     DMG_OUTPUT="${BUILD_DIR}/${APP_NAME}-${VERSION}-ARM.dmg" ;;
-    x86_64)    DMG_OUTPUT="${BUILD_DIR}/${APP_NAME}-${VERSION}-Intel.dmg" ;;
-esac
+DMG_OUTPUT="${BUILD_DIR}/${APP_NAME}-${VERSION}.dmg"
 
 # 架构相关路径
 ARM64_BUILD_DIR="${BUILD_DIR}/arm64-apple-macosx/release"

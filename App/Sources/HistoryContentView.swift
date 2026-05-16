@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import QuickLook
 
 // ============================================================
 // HistoryPanel - Paste 风格悬浮面板
@@ -109,6 +110,7 @@ struct HistoryContentView: View {
     @State private var pinboardToRename: Pinboard? = nil
     @State private var renameText: String = ""
     @State private var pinboardToDelete: Pinboard? = nil
+    @State private var previewItem: ClipboardItem?
 
     var onItemSelected: (ClipboardItem) -> Void
     var onPastePlainText: (ClipboardItem) -> Void
@@ -173,6 +175,11 @@ struct HistoryContentView: View {
             if let state = notification.userInfo?["syncState"] as? SyncState {
                 syncState = state
             }
+        }
+        // Quick Look 预览
+        .sheet(item: $previewItem) { item in
+            ClipMatePreviewView(item: item)
+                .frame(minWidth: 500, minHeight: 400)
         }
     }
 
@@ -529,12 +536,8 @@ struct HistoryContentView: View {
         case .edit:
             // TODO: 打开编辑对话框
             print("[HistoryContentView] 编辑条目: \(item.id ?? 0)")
-        case .rename:
-            // TODO: 打开重命名对话框
-            print("[HistoryContentView] 重命名条目: \(item.id ?? 0)")
         case .preview:
-            // TODO: 打开预览窗口
-            print("[HistoryContentView] 预览条目: \(item.id ?? 0)")
+            previewItem = item
         case .share:
             // TODO: 打开分享面板
             shareItem(item)
@@ -644,5 +647,180 @@ struct NewPinboardDialog: View {
         }
         .padding(24)
         .frame(width: 300)
+    }
+}
+
+// MARK: - 预览视图
+
+struct ClipMatePreviewView: View {
+    let item: ClipboardItem
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 顶部标题栏
+            HStack {
+                Text(previewTitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+
+                Spacer()
+
+                Text(item.contentType.displayName)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+
+                if let date = item.copiedAt {
+                    Text(date, style: .date)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            Divider()
+
+            // 内容区域
+            ScrollView {
+                previewContent
+                    .padding(20)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 500, minHeight: 400)
+    }
+
+    private var previewTitle: String {
+        switch item.contentType {
+        case .text, .link:
+            return String(item.textContent?.prefix(50) ?? "预览")
+        case .image:
+            return "图片预览"
+        case .fileURL:
+            return "文件预览"
+        case .html:
+            return "富文本预览"
+        case .rtfd:
+            return "富文本预览"
+        case .unknown:
+            return "预览"
+        }
+    }
+
+    @ViewBuilder
+    private var previewContent: some View {
+        switch item.contentType {
+        case .text:
+            if let text = item.textContent {
+                Text(text)
+                    .font(.system(size: 13))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+        case .link:
+            VStack(alignment: .leading, spacing: 8) {
+                if let text = item.textContent {
+                    Text(text)
+                        .font(.system(size: 13))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let url = URL(string: item.textContent ?? "") {
+                    Link("打开链接", destination: url)
+                        .font(.system(size: 12))
+                }
+            }
+
+        case .image:
+            if let data = item.imageData, let nsImage = NSImage(data: data) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .cornerRadius(8)
+            }
+
+        case .fileURL:
+            if let urls = item.fileURLs {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(urls, id: \.self) { url in
+                        HStack {
+                            Image(systemName: "doc.fill")
+                                .foregroundColor(.blue)
+                            Text(url.lastPathComponent)
+                                .font(.system(size: 13))
+                                .textSelection(.enabled)
+                            Spacer()
+                            Text(ByteCountFormatter.string(fromByteCount: getFileSize(url), countStyle: .file))
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+
+        case .html:
+            if let html = item.htmlContent {
+                ScrollView {
+                    Text(attributedStringFromHTML(html))
+                        .font(.system(size: 13))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+        case .rtfd:
+            Text("富文本内容")
+                .foregroundColor(.secondary)
+
+        case .unknown:
+            Text("无法预览此类型的内容")
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func getFileSize(_ url: URL) -> Int64 {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let size = values.fileSize else { return 0 }
+        return Int64(size)
+    }
+
+    private func attributedStringFromHTML(_ html: String) -> AttributedString {
+        guard let data = html.data(using: .utf8),
+              let attrStr = try? NSAttributedString(
+                data: data,
+                options: [.documentType: NSAttributedString.DocumentType.html,
+                          .characterEncoding: String.Encoding.utf8.rawValue],
+                documentAttributes: nil
+              ) else {
+            return AttributedString(html)
+        }
+        return AttributedString(attrStr)
+    }
+}
+
+// ClipboardItem.ContentType 的显示名称
+extension ClipboardItem.ContentType {
+    var displayName: String {
+        switch self {
+        case .text: return "文本"
+        case .image: return "图片"
+        case .fileURL: return "文件"
+        case .link: return "链接"
+        case .html: return "富文本"
+        case .rtfd: return "富文本"
+        case .unknown: return "未知"
+        }
     }
 }

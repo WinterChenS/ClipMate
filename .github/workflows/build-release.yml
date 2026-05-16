@@ -157,57 +157,30 @@ jobs:
           echo "=== Universal binary archs ==="
           lipo -archs "${UNIVERSAL_APP}/Contents/MacOS/${APP_NAME}"
 
-          # ---- Create DMGs ----
-          create_dmg() {
-            local app_dir="$1"
-            local suffix="$2"
-            local dmg_output=".build/${APP_NAME}-${VERSION}-${suffix}.dmg"
-            local dmg_staging=".build/dmg-${suffix}"
+          # ---- Create DMG ----
+          DMG_STAGING=".build/dmg-staging"
+          DMG_OUTPUT=".build/${APP_NAME}-${VERSION}.dmg"
 
-            rm -rf "${dmg_staging}"
-            mkdir -p "${dmg_staging}"
-            cp -R "${app_dir}" "${dmg_staging}/"
-            ln -s /Applications "${dmg_staging}/Applications"
+          rm -rf "${DMG_STAGING}"
+          mkdir -p "${DMG_STAGING}"
+          cp -R "${UNIVERSAL_APP}" "${DMG_STAGING}/"
+          ln -s /Applications "${DMG_STAGING}/Applications"
 
-            hdiutil create \
-              -volname "${APP_NAME}" \
-              -srcfolder "${dmg_staging}" \
-              -ov \
-              -format UDZO \
-              "${dmg_output}"
+          hdiutil create \
+            -volname "${APP_NAME}" \
+            -srcfolder "${DMG_STAGING}" \
+            -ov \
+            -format UDZO \
+            "${DMG_OUTPUT}"
 
-            echo "  ✅ ${dmg_output} ($(du -h "${dmg_output}" | cut -f1))"
-          }
-
-          echo ">>> Creating DMGs..."
-          create_dmg "${ARM_APP}" "ARM"
-          create_dmg "${INTEL_APP}" "Intel"
-          create_dmg "${UNIVERSAL_APP}" "Universal"
-
-          # ---- List all DMGs ----
-          echo ""
-          echo "=== Build artifacts ==="
+          echo "  ✅ ${DMG_OUTPUT} ($(du -h "${DMG_OUTPUT}" | cut -f1))"
           ls -lh .build/*.dmg
 
-      - name: Upload ARM DMG
+      - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: ClipMate-ARM
-          path: .build/ClipMate-*-ARM.dmg
-          retention-days: 90
-
-      - name: Upload Intel DMG
-        uses: actions/upload-artifact@v4
-        with:
-          name: ClipMate-Intel
-          path: .build/ClipMate-*-Intel.dmg
-          retention-days: 90
-
-      - name: Upload Universal DMG
-        uses: actions/upload-artifact@v4
-        with:
-          name: ClipMate-Universal
-          path: .build/ClipMate-*-Universal.dmg
+          name: ClipMate
+          path: .build/ClipMate-*.dmg
           retention-days: 90
 
       - name: Create GitHub Release
@@ -218,26 +191,17 @@ jobs:
           body: |
             ## ClipMate ${{ github.ref_name }}
 
-            ### 下载
-
-            | 文件 | 架构 | 说明 |
-            |------|------|------|
-            | `ClipMate-*-Universal.dmg` | Universal (ARM + Intel) | **推荐** — 同时支持两种架构 |
-            | `ClipMate-*-ARM.dmg` | Apple Silicon (M1/M2/M3/M4) | 仅 M 系列芯片 |
-            | `ClipMate-*-Intel.dmg` | Intel (x86_64) | 仅 Intel 芯片 |
-
             ### 安装
 
-            1. 下载 DMG 文件（推荐 Universal 版本）
+            1. 下载 DMG 文件
             2. 双击打开，拖拽 ClipMate 到 Applications 文件夹
             3. 首次运行需在 **系统设置 > 隐私与安全性 > 辅助功能** 中授权
 
             ### 系统要求
 
             - macOS 14.0 (Sonoma) 或更高版本
+            - 支持 Apple Silicon (M1/M2/M3/M4) 和 Intel Mac
           files: |
-            .build/ClipMate-*-ARM.dmg
-            .build/ClipMate-*-Intel.dmg
-            .build/ClipMate-*-Universal.dmg
+            .build/ClipMate-*.dmg
           draft: false
           prerelease: false
