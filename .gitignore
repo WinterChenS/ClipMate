@@ -13,6 +13,7 @@ xcuserdata/
 .build/
 .swiftpm/
 build/
+.build_scratch/
 DerivedData/
 
 # XcodeGen
