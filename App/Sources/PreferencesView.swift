@@ -30,6 +30,15 @@ struct PreferencesView: View {
 
     // MARK: - 依赖
     let databaseManager: DatabaseManager
+    var syncManager: ICloudDriveSyncManager?
+
+    // MARK: - 同步设置
+    @State private var syncEnabled: Bool = false
+    @State private var syncState: SyncState = .disabled
+    @State private var lastSyncDate: Date?
+    @State private var syncErrorMessage: String?
+    @State private var isCheckingAccount = false
+    @State private var iCloudAvailable = false
 
     var body: some View {
         NavigationSplitView {
@@ -63,6 +72,8 @@ struct PreferencesView: View {
             shortcutSettings
         case .exclusions:
             exclusionSettings
+        case .sync:
+            syncSettings
         case .storage:
             storageSettings
         case .about:
@@ -239,6 +250,186 @@ struct PreferencesView: View {
             }
         }
         .padding()
+    }
+
+    // MARK: - 同步设置
+
+    private var syncSettings: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("iCloud 同步")
+                .font(.headline)
+
+            if syncManager != nil {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("启用 iCloud Drive 同步", isOn: $syncEnabled)
+                        .onChange(of: syncEnabled) { _, newValue in
+                            syncManager?.isEnabled = newValue
+                        }
+
+                    if syncEnabled {
+                        Divider()
+
+                        // 同步状态
+                        HStack {
+                            Text("同步状态")
+                            Spacer()
+                            syncStateLabel(state: syncState)
+                        }
+
+                        // 上次同步时间
+                        if let lastDate = lastSyncDate {
+                            HStack {
+                                Text("上次同步")
+                                Spacer()
+                                Text(lastDate, style: .relative)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        // 错误信息
+                        if let error = syncErrorMessage {
+                            HStack(alignment: .top) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.yellow)
+                                    .font(.system(size: 12))
+                                Text(error)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        // 手动同步按钮
+                        HStack {
+                            Button("立即同步") {
+                                Task {
+                                    await syncManager?.performFullSync()
+                                }
+                            }
+                            .disabled(syncState == .pushing || syncState == .pulling || syncState == .syncing)
+
+                            if syncState == .pushing || syncState == .pulling || syncState == .syncing {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .frame(width: 16, height: 16)
+                            }
+                        }
+                    }
+
+                    // iCloud 可用性提示
+                    if !iCloudAvailable && !isCheckingAccount {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.icloud")
+                                .foregroundColor(.secondary)
+                            Text("iCloud 账号未登录或不可用")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color.primary.opacity(0.04))
+                .cornerRadius(8)
+            } else {
+                VStack(spacing: 8) {
+                    Image(systemName: "icloud.slash")
+                        .font(.system(size: 32))
+                        .foregroundColor(.secondary.opacity(0.5))
+                    Text("iCloud 同步不可用")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                    Text("请确认已在系统设置中登录 iCloud 账号")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            Spacer()
+
+            Text("同步通过 iCloud Drive 实现，无需付费 Apple Developer 账号。所有数据端到端加密传输。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .onAppear {
+            syncEnabled = syncManager?.isEnabled ?? false
+            syncState = syncManager?.syncState ?? .disabled
+            lastSyncDate = syncManager?.lastSyncDate
+            syncErrorMessage = syncManager?.errorMessage
+            checkiCloudAvailability()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cloudKitSyncStateDidChange)) { notification in
+            if let state = notification.userInfo?["syncState"] as? SyncState {
+                syncState = state
+            }
+            // 同步刷新其他状态
+            lastSyncDate = syncManager?.lastSyncDate
+            syncErrorMessage = syncManager?.errorMessage
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .iCloudSyncSettingDidChange)) { _ in
+            syncEnabled = syncManager?.isEnabled ?? false
+        }
+    }
+
+    @ViewBuilder
+    private func syncStateLabel(state: SyncState) -> some View {
+        switch state {
+        case .disabled:
+            Text("未启用")
+                .foregroundColor(.secondary)
+        case .idle:
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.system(size: 11))
+                Text("已同步")
+                    .foregroundColor(.secondary)
+            }
+        case .pushing:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .scaleEffect(0.6)
+                    .frame(width: 12, height: 12)
+                Text("正在推送...")
+                    .foregroundColor(.secondary)
+            }
+        case .pulling:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .scaleEffect(0.6)
+                    .frame(width: 12, height: 12)
+                Text("正在拉取...")
+                    .foregroundColor(.secondary)
+            }
+        case .syncing:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .scaleEffect(0.6)
+                    .frame(width: 12, height: 12)
+                Text("同步中...")
+                    .foregroundColor(.secondary)
+            }
+        case .error:
+            HStack(spacing: 4) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.red)
+                    .font(.system(size: 11))
+                Text("同步失败")
+                    .foregroundColor(.red)
+            }
+        }
+    }
+
+    private func checkiCloudAvailability() {
+        guard let mgr = syncManager else { return }
+        isCheckingAccount = true
+        Task {
+            let available = await mgr.checkAccountStatus()
+            await MainActor.run {
+                iCloudAvailable = available
+                isCheckingAccount = false
+            }
+        }
     }
 
     // MARK: - 存储设置
@@ -597,6 +788,7 @@ enum PreferencesSection: String, CaseIterable {
     case general = "通用"
     case shortcuts = "快捷键"
     case exclusions = "排除应用"
+    case sync = "同步"
     case storage = "存储"
     case about = "关于"
 
@@ -607,6 +799,7 @@ enum PreferencesSection: String, CaseIterable {
         case .general: return "gearshape"
         case .shortcuts: return "keyboard"
         case .exclusions: return "xmark.app"
+        case .sync: return "icloud"
         case .storage: return "externaldrive"
         case .about: return "info.circle"
         }

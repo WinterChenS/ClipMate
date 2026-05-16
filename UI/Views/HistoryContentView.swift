@@ -273,7 +273,7 @@ struct HistoryContentView: View {
     private var contentArea: some View {
         switch selectedTab {
         case .history:
-            PasteClipList(
+            ClipboardListView(
                 items: viewModel.filteredItems,
                 onItemSelected: onItemSelected,
                 onItemAction: { item, action in
@@ -281,7 +281,7 @@ struct HistoryContentView: View {
                 }
             )
         case .pinboard:
-            PasteClipList(
+            ClipboardListView(
                 items: viewModel.pinboardItems,
                 onItemSelected: onItemSelected,
                 onItemAction: { item, action in
@@ -289,7 +289,7 @@ struct HistoryContentView: View {
                 }
             )
         case .favorites:
-            PasteClipList(
+            ClipboardListView(
                 items: viewModel.favorites,
                 onItemSelected: onItemSelected,
                 onItemAction: { item, action in

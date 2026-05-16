@@ -36,6 +36,9 @@ struct PinboardListView: View {
             }
         }
         .frame(maxHeight: .infinity)
+        .sheet(isPresented: $showingNewPinboardSheet) {
+            NewPinboardSheet(isPresented: $showingNewPinboardSheet)
+        }
     }
 
     private var emptyState: some View {
@@ -81,9 +84,6 @@ struct PinboardListView: View {
             )
         }
         .buttonStyle(.plain)
-    }
-    .sheet(isPresented: $showingNewPinboardSheet) {
-        NewPinboardSheet(isPresented: $showingNewPinboardSheet)
     }
 }
 

@@ -99,6 +99,8 @@ class HistoryPanel: NSPanel {
 struct HistoryContentView: View {
 
     @ObservedObject var viewModel: HistoryViewModel
+    var syncManager: ICloudDriveSyncManager?
+    @State private var syncState: SyncState = .disabled
     @State private var selectedTab: HistoryTab = .history
     @State private var showingNewPinboardDialog = false
     @State private var newPinboardName = ""
@@ -114,11 +116,13 @@ struct HistoryContentView: View {
 
     init(
         databaseManager: DatabaseManager,
+        syncManager: ICloudDriveSyncManager? = nil,
         onItemSelected: @escaping (ClipboardItem) -> Void,
         onPastePlainText: @escaping (ClipboardItem) -> Void,
         onClose: @escaping () -> Void
     ) {
         self.viewModel = HistoryViewModel(databaseManager: databaseManager)
+        self.syncManager = syncManager
         self.onItemSelected = onItemSelected
         self.onPastePlainText = onPastePlainText
         self.onClose = onClose
@@ -152,6 +156,10 @@ struct HistoryContentView: View {
             viewModel.loadHistory()
             viewModel.loadPinboards()
             hasAccessibilityPermission = AXIsProcessTrusted()
+            // 初始化同步状态
+            if let mgr = syncManager {
+                syncState = mgr.syncState
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .clipboardDidChange)) { _ in
             viewModel.loadHistory()
@@ -160,6 +168,11 @@ struct HistoryContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusSearchField)) { _ in
             isSearchFocused = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cloudKitSyncStateDidChange)) { notification in
+            if let state = notification.userInfo?["syncState"] as? SyncState {
+                syncState = state
+            }
         }
     }
 
@@ -451,9 +464,14 @@ struct HistoryContentView: View {
                 .buttonStyle(.plain)
                 .help("点击打开系统设置，授予 ClipMate 辅助功能权限")
             } else {
-                Text("\(currentItems.count) 条")
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                HStack(spacing: 6) {
+                    Text("\(currentItems.count) 条")
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
+
+                    // iCloud 同步状态指示
+                    syncStatusIndicator
+                }
             }
 
             Spacer()
@@ -465,6 +483,31 @@ struct HistoryContentView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .background(Color.primary.opacity(0.06))
+    }
+
+    // MARK: - 同步状态指示器
+
+    @ViewBuilder
+    private var syncStatusIndicator: some View {
+        switch syncState {
+        case .disabled:
+            EmptyView()
+        case .idle:
+            Image(systemName: "icloud.fill")
+                .font(.system(size: 10))
+                .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                .help("iCloud 已同步")
+        case .pushing, .pulling, .syncing:
+            Image(systemName: "icloud.fill")
+                .font(.system(size: 10))
+                .foregroundColor(.blue)
+                .help("iCloud 同步中...")
+        case .error:
+            Image(systemName: "icloud.slash")
+                .font(.system(size: 10))
+                .foregroundColor(.red)
+                .help("iCloud 同步失败")
+        }
     }
 
     // MARK: - 操作处理

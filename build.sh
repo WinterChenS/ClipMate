@@ -5,9 +5,36 @@
 #  - 自动安装缺失组件
 #  - Release 模式编译
 #  - 打包为 .app + .dmg 安装包
+#  - 支持多架构: arm64 / x86_64 / universal (默认)
 # ============================================================
 
 set -euo pipefail
+
+# ---- 解析 --arch 参数 ----
+BUILD_ARCH="universal"
+PARSE_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --arch)
+            BUILD_ARCH="${2:-universal}"
+            shift 2
+            ;;
+        *)
+            PARSE_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${PARSE_ARGS[@]+"${PARSE_ARGS[@]}"}"
+
+# 验证架构参数
+case "${BUILD_ARCH}" in
+    arm64|x86_64|universal) ;;
+    *)
+        echo "错误: --arch 仅支持 arm64 / x86_64 / universal"
+        exit 1
+        ;;
+esac
 
 # ---- 清理环境：移除可能干扰的 PATH 条目（如 GVM）----
 # GVM 的 bin 目录中某些 wrapper 会拦截系统命令（如 swift）
@@ -47,7 +74,17 @@ BUILD_DIR="${PROJECT_DIR}/.build"
 RELEASE_DIR="${BUILD_DIR}/release"
 BUNDLE_DIR="${BUILD_DIR}/${APP_NAME}.app"
 DMG_DIR="${BUILD_DIR}/dmg"
-DMG_OUTPUT="${BUILD_DIR}/${APP_NAME}-${VERSION}.dmg"
+# DMG 文件名包含架构标识
+case "${BUILD_ARCH}" in
+    universal) DMG_OUTPUT="${BUILD_DIR}/${APP_NAME}-${VERSION}-Universal.dmg" ;;
+    arm64)     DMG_OUTPUT="${BUILD_DIR}/${APP_NAME}-${VERSION}-ARM.dmg" ;;
+    x86_64)    DMG_OUTPUT="${BUILD_DIR}/${APP_NAME}-${VERSION}-Intel.dmg" ;;
+esac
+
+# 架构相关路径
+ARM64_BUILD_DIR="${BUILD_DIR}/arm64-apple-macosx/release"
+X86_BUILD_DIR="${BUILD_DIR}/x86_64-apple-macosx/release"
+UNIVERSAL_BINARY=""  # 最终放入 .app 的二进制路径
 
 # ---- 颜色 ----
 RED='\033[0;31m'
@@ -160,7 +197,7 @@ install_xcode_cli() {
 # ============================================================
 build_project() {
     separator
-    log_info "Step 2/5: 编译项目 (Release 模式)"
+    log_info "Step 2/5: 编译项目 (Release 模式, 架构: ${BUILD_ARCH})"
     separator
 
     cd "${PROJECT_DIR}"
@@ -173,37 +210,84 @@ build_project() {
     }
     log_ok "依赖解析完成"
 
-    # Release 编译（Debug 模式在 Swift 6 下会触发编译器崩溃）
-    log_info "开始 Release 编译..."
-    local build_output
-    build_output=$(xcrun swift build -c release 2>&1) || {
-        echo "$build_output" | tail -20
-        log_error "编译失败"
-        exit 1
-    }
-    # 只在有 error 时才显示输出
-    if echo "$build_output" | grep -q "error:"; then
-        echo "$build_output" | grep "error:" | head -10
-        log_error "编译有错误"
-        exit 1
-    fi
-    # 显示 warning 摘要（不视为失败）
-    local warning_count
-    warning_count=$(echo "$build_output" | grep -c "warning:" || true)
-    if (( warning_count > 0 )); then
-        log_warn "编译有 ${warning_count} 个 warning（不影响运行）"
+    # ---- 根据架构编译 ----
+    if [[ "${BUILD_ARCH}" == "universal" ]]; then
+        # Universal: 编译 arm64 + x86_64，再用 lipo 合并
+        build_for_arch "arm64" "${ARM64_BUILD_DIR}"
+        build_for_arch "x86_64" "${X86_BUILD_DIR}"
+
+        # 用 lipo 合并为 Universal Binary
+        log_info "合并为 Universal Binary..."
+        mkdir -p "${RELEASE_DIR}"
+        lipo -create \
+            "${ARM64_BUILD_DIR}/${APP_NAME}" \
+            "${X86_BUILD_DIR}/${APP_NAME}" \
+            -output "${RELEASE_DIR}/${APP_NAME}"
+
+        UNIVERSAL_BINARY="${RELEASE_DIR}/${APP_NAME}"
+
+    elif [[ "${BUILD_ARCH}" == "arm64" ]]; then
+        build_for_arch "arm64" "${RELEASE_DIR}"
+        UNIVERSAL_BINARY="${RELEASE_DIR}/${APP_NAME}"
+
+    elif [[ "${BUILD_ARCH}" == "x86_64" ]]; then
+        build_for_arch "x86_64" "${RELEASE_DIR}"
+        UNIVERSAL_BINARY="${RELEASE_DIR}/${APP_NAME}"
     fi
 
     # 验证产物
-    if [[ ! -f "${RELEASE_DIR}/${APP_NAME}" ]]; then
-        log_error "编译产物未找到: ${RELEASE_DIR}/${APP_NAME}"
+    if [[ ! -f "${UNIVERSAL_BINARY}" ]]; then
+        log_error "编译产物未找到: ${UNIVERSAL_BINARY}"
         exit 1
     fi
 
+    # 显示架构信息
+    local arch_info
+    arch_info=$(lipo -archs "${UNIVERSAL_BINARY}" 2>/dev/null || file "${UNIVERSAL_BINARY}" | grep -oE 'arm64|x86_64' | paste -sd ' ' -)
     local binary_size
-    binary_size=$(du -h "${RELEASE_DIR}/${APP_NAME}" | cut -f1)
-    log_ok "编译成功: ${RELEASE_DIR}/${APP_NAME} (${binary_size})"
+    binary_size=$(du -h "${UNIVERSAL_BINARY}" | cut -f1)
+    log_ok "编译成功: ${UNIVERSAL_BINARY} (${binary_size}) [${arch_info}]"
     echo ""
+}
+
+# 编译单个架构
+build_for_arch() {
+    local arch="$1"
+    local expected_dir="$2"
+
+    log_info "编译 ${arch}..."
+    local build_output
+    build_output=$(xcrun swift build -c release --arch "${arch}" 2>&1) || {
+        echo "$build_output" | tail -20
+        log_error "${arch} 编译失败"
+        exit 1
+    }
+    # 检查 error
+    if echo "$build_output" | grep -q "error:"; then
+        echo "$build_output" | grep "error:" | head -10
+        log_error "${arch} 编译有错误"
+        exit 1
+    fi
+    # 显示 warning 摘要
+    local warning_count
+    warning_count=$(echo "$build_output" | grep -c "warning:" || true)
+    if (( warning_count > 0 )); then
+        log_warn "${arch} 编译有 ${warning_count} 个 warning（不影响运行）"
+    fi
+
+    # 验证产物
+    if [[ ! -f "${expected_dir}/${APP_NAME}" ]]; then
+        log_error "${arch} 编译产物未找到: ${expected_dir}/${APP_NAME}"
+        exit 1
+    fi
+
+    local arch_check
+    arch_check=$(file "${expected_dir}/${APP_NAME}" | grep -c "${arch}" || true)
+    if (( arch_check == 0 )); then
+        log_warn "${arch} 产物架构不匹配，但继续执行"
+    fi
+
+    log_ok "${arch} 编译完成"
 }
 
 # ============================================================
@@ -222,8 +306,9 @@ create_app_bundle() {
     mkdir -p "${BUNDLE_DIR}/Contents/MacOS"
     mkdir -p "${BUNDLE_DIR}/Contents/Resources"
 
-    # 复制可执行文件
-    cp "${RELEASE_DIR}/${APP_NAME}" "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}"
+    # 复制可执行文件（使用编译产物路径）
+    local binary_source="${UNIVERSAL_BINARY:-${RELEASE_DIR}/${APP_NAME}}"
+    cp "${binary_source}" "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}"
     chmod +x "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}"
     log_ok "可执行文件已复制"
 
@@ -309,25 +394,66 @@ code_sign() {
         return
     fi
 
+    # 生成不含 iCloud 权限的临时 entitlements 文件
+    # build.sh 使用 swift build + codesign，无法嵌入 provisioning profile
+    # iCloud entitlements 在没有 provisioning profile 时会导致 macOS 拒绝启动 (error 153)
+    # 只有用 Xcode 自动构建时才能正常使用 iCloud
+    local entitlements_source="${BUNDLE_DIR}/Contents/Resources/${APP_NAME}.entitlements"
+    local signing_entitlements=""
+
+    if [[ -f "${entitlements_source}" ]]; then
+        signing_entitlements=$(mktemp /tmp/clipmate_entitlements.XXXXX.plist)
+        cp "${entitlements_source}" "${signing_entitlements}"
+
+        # 用 PlistBuddy 精确删除 iCloud 条目
+        /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.ubiquity-container-identifiers" "${signing_entitlements}" 2>/dev/null
+        /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.ubiquity-kvstore-identifier" "${signing_entitlements}" 2>/dev/null
+
+        if /usr/libexec/PlistBuddy -c "Print" "${signing_entitlements}" &>/dev/null; then
+            log_info "已移除 iCloud entitlements（build.sh 签名无法嵌入 provisioning profile，保留会导致启动失败）"
+        else
+            log_warn "临时 entitlements 生成失败，使用原始文件"
+            rm -f "${signing_entitlements}"
+            signing_entitlements="${entitlements_source}"
+        fi
+    fi
+
     # 检查是否有开发者证书
+    # 注意：security find-identity 有时搜不到有效证书，改用 find-certificate 作为回退
     local dev_identity
     dev_identity=$(security find-identity -v -p codesigning 2>/dev/null | \
                    grep "Apple Development\|Developer ID Application" | \
                    head -1 | \
                    grep -oE '"[^"]+"$' | tr -d '"' || true)
 
+    # 回退：直接从钥匙串搜索 Apple Development 证书
+    if [[ -z "${dev_identity}" ]]; then
+        dev_identity=$(security find-certificate -a -c "Apple Development" \
+                       /Users/winterchen/Library/Keychains/login.keychain-db 2>/dev/null | \
+                       grep "alis" | grep -oE '"Apple Development[^"]*"' | tr -d '"' | head -1 || true)
+    fi
+
     if [[ -n "${dev_identity}" ]]; then
         log_info "找到开发者证书: ${dev_identity}"
         log_info "使用开发者证书签名..."
 
         # Deep sign the .app bundle
-        codesign --force --deep --sign "${dev_identity}" \
-                 --options runtime \
-                 --entitlements "${BUNDLE_DIR}/Contents/Resources/${APP_NAME}.entitlements" \
-                 "${BUNDLE_DIR}" 2>&1 || {
-            log_warn "开发者签名失败，回退到 ad-hoc 签名"
-            dev_identity=""
-        }
+        if [[ -n "${signing_entitlements}" ]]; then
+            codesign --force --deep --sign "${dev_identity}" \
+                     --options runtime \
+                     --entitlements "${signing_entitlements}" \
+                     "${BUNDLE_DIR}" 2>&1 || {
+                log_warn "开发者签名失败，回退到 ad-hoc 签名"
+                dev_identity=""
+            }
+        else
+            codesign --force --deep --sign "${dev_identity}" \
+                     --options runtime \
+                     "${BUNDLE_DIR}" 2>&1 || {
+                log_warn "开发者签名失败，回退到 ad-hoc 签名"
+                dev_identity=""
+            }
+        fi
 
         if [[ -n "${dev_identity}" ]]; then
             log_ok "开发者签名完成 ✓"
@@ -335,6 +461,7 @@ code_sign() {
             codesign --verify --deep --strict "${BUNDLE_DIR}" 2>&1 && \
                 log_ok "签名验证通过" || \
                 log_warn "签名验证未通过"
+            rm -f "${signing_entitlements}" 2>/dev/null
             echo ""
             return
         fi
@@ -342,11 +469,27 @@ code_sign() {
 
     # Ad-hoc 签名（无证书时的回退方案）
     log_info "使用 Ad-hoc 签名..."
-    codesign --force --deep --sign - "${BUNDLE_DIR}" 2>&1 || {
-        log_warn "签名失败（不影响本地运行）"
-        echo ""
-        return
-    }
+
+    if [[ -n "${signing_entitlements}" ]]; then
+        codesign --force --deep --sign - \
+                 --options runtime \
+                 --entitlements "${signing_entitlements}" \
+                 "${BUNDLE_DIR}" 2>&1 || {
+            log_warn "签名失败（不影响本地运行）"
+            rm -f "${signing_entitlements}" 2>/dev/null
+            echo ""
+            return
+        }
+    else
+        codesign --force --deep --sign - \
+                 --options runtime \
+                 "${BUNDLE_DIR}" 2>&1 || {
+            log_warn "签名失败（不影响本地运行）"
+            echo ""
+            return
+        }
+    fi
+    rm -f "${signing_entitlements}" 2>/dev/null
     log_ok "Ad-hoc 签名完成"
     echo ""
 }
@@ -416,7 +559,7 @@ main() {
     echo ""
     echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║     ${APP_NAME} Build Script             ║${NC}"
-    echo -e "${CYAN}║     v${VERSION}                            ║${NC}"
+    echo -e "${CYAN}║     v${VERSION}  (${BUILD_ARCH})             ║${NC}"
     echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
     echo ""
 
@@ -444,7 +587,7 @@ main() {
 
     # 完成总结
     separator
-    echo -e "${GREEN}✅ 构建完成！${NC}"
+    echo -e "${GREEN}✅ 构建完成！(架构: ${BUILD_ARCH})${NC}"
     separator
     echo ""
     echo -e "  ${CYAN}产物路径:${NC}"
@@ -459,6 +602,20 @@ main() {
     echo ""
     echo -e "  ${CYAN}直接运行:${NC}"
     echo -e "    open \"${BUNDLE_DIR}\""
+    echo ""
+    echo -e "  ${CYAN}架构说明:${NC}"
+    if [[ "${BUILD_ARCH}" == "universal" ]]; then
+    echo -e "    Universal Binary: 同时支持 Apple Silicon (M1/M2/M3/M4) 和 Intel Mac"
+    elif [[ "${BUILD_ARCH}" == "arm64" ]]; then
+    echo -e "    ARM64: 仅支持 Apple Silicon (M1/M2/M3/M4)"
+    elif [[ "${BUILD_ARCH}" == "x86_64" ]]; then
+    echo -e "    x86_64: 仅支持 Intel Mac"
+    fi
+    echo ""
+    echo -e "  ${CYAN}其他架构构建:${NC}"
+    echo -e "    ./build.sh --arch arm64     # 仅 M 系列芯片"
+    echo -e "    ./build.sh --arch x86_64    # 仅 Intel 芯片"
+    echo -e "    ./build.sh --arch universal # 双架构通用 (默认)"
     echo ""
     echo -e "  ${CYAN}耗时: ${elapsed}s${NC}"
     echo ""
@@ -491,7 +648,8 @@ case "${1:-}" in
         # 编译并运行
         build_project
         log_info "启动 ${APP_NAME}..."
-        "${RELEASE_DIR}/${APP_NAME}" &
+        local run_binary="${UNIVERSAL_BINARY:-${RELEASE_DIR}/${APP_NAME}}"
+        "${run_binary}" &
         log_ok "已启动 (PID: $!)"
         ;;
     *)

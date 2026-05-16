@@ -6,7 +6,7 @@ import SwiftUI
 // @MainActor: 所有 UI 代码都在主线程执行（Swift 6 并发安全）
 // ============================================================
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - 属性
 
@@ -18,6 +18,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var clipboardMonitor: ClipboardMonitor?
     /// 数据库管理器
     private var databaseManager: DatabaseManager?
+    /// iCloud 同步管理器
+    private var iCloudSyncManager: ICloudDriveSyncManager?
     /// 设置窗口
     private var preferencesWindow: NSWindow?
     /// 打开面板前的前台应用（用于粘贴后归还焦点）
@@ -59,6 +61,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 启动时检测辅助功能权限
         checkAccessibilityPermissionOnLaunch()
+
+        // 初始化 iCloud Drive 同步
+        if let dbManager = databaseManager {
+            iCloudSyncManager = ICloudDriveSyncManager(databaseManager: dbManager)
+            print("[ClipMate] iCloud Drive 同步管理器已初始化")
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -153,6 +161,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let contentView = HistoryContentView(
             databaseManager: dbManager,
+            syncManager: iCloudSyncManager,
             onItemSelected: { [weak self] item in
                 self?.pasteItem(item)
             },
@@ -246,8 +255,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             panel.animator().alphaValue = 0.0
         }, completionHandler: {
             panel.orderOut(nil)
-            // 隐藏后恢复 accessory 策略（无 Dock 图标）
-            NSApp.setActivationPolicy(.accessory)
+            // 隐藏后检查是否需要恢复 accessory 策略（无 Dock 图标）
+            self.updateActivationPolicy(forWindowAction: .hide)
         })
     }
 
@@ -358,8 +367,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         panel.orderOut(nil)
-        // 恢复 accessory 策略（无 Dock 图标）
-        NSApp.setActivationPolicy(.accessory)
+        // 恢复激活策略（如果设置窗口也不可见，则恢复 accessory）
+        updateActivationPolicy(forWindowAction: .hide)
     }
 
     /// 焦点切换 + 延迟 + 模拟粘贴的完整序列
@@ -418,7 +427,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 print("[ClipMate] ⚠️ 数据库未初始化，无法打开偏好设置")
                 return
             }
-            let preferencesView = PreferencesView(databaseManager: dbManager)
+            let preferencesView = PreferencesView(databaseManager: dbManager, syncManager: iCloudSyncManager)
             preferencesWindow = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
                 styleMask: [.titled, .closable],
@@ -430,8 +439,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             preferencesWindow?.contentView = NSHostingView(rootView: preferencesView)
             preferencesWindow?.center()
             preferencesWindow?.isReleasedWhenClosed = false
+            preferencesWindow?.delegate = self
         }
+
+        // 关键：LSUIElement 应用必须激活才能让窗口正确显示
+        updateActivationPolicy(forWindowAction: .show)
         preferencesWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func focusSearch() {
@@ -614,10 +628,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // 如果面板不处于显示状态，恢复 accessory 模式
-        if !(historyPanel?.isVisible ?? false) {
-            NSApp.setActivationPolicy(.accessory)
-        }
+        // 如果面板和设置窗口都不处于显示状态，恢复 accessory 模式
+        updateActivationPolicy(forWindowAction: .hide)
     }
 
     /// 触发 macOS 系统原生辅助功能授权弹窗
@@ -641,6 +653,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             print("[ClipMate] 等待权限授权超时")
+        }
+    }
+
+    // MARK: - 激活策略管理
+
+    /// 窗口操作类型
+    private enum WindowAction {
+        case show   // 显示窗口
+        case hide   // 隐藏/关闭窗口
+    }
+
+    /// 统一管理 activationPolicy：
+    /// - 面板可见 OR 设置窗口可见 → .regular（显示 Dock 图标，可接收焦点）
+    /// - 两者都不可见 → .accessory（仅菜单栏图标，无 Dock 图标）
+    private func updateActivationPolicy(forWindowAction action: WindowAction) {
+        let panelVisible = historyPanel?.isVisible ?? false
+        let prefsVisible = preferencesWindow?.isVisible ?? false
+        let anyWindowVisible = panelVisible || prefsVisible
+
+        if anyWindowVisible {
+            NSApp.setActivationPolicy(.regular)
+        } else {
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
+    // MARK: - NSWindowDelegate
+
+    nonisolated func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+
+        MainActor.assumeIsolated {
+            // 设置窗口关闭时，清理引用并更新激活策略
+            if window == preferencesWindow {
+                // 延迟一帧后更新策略（isVisible 此时可能仍为 true）
+                DispatchQueue.main.async {
+                    self.updateActivationPolicy(forWindowAction: .hide)
+                }
+            }
         }
     }
 }

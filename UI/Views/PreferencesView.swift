@@ -303,6 +303,7 @@ struct ExclusionRow: View {
     init(appName: String, bundleId: String, isEnabled: Bool) {
         self.appName = appName
         self.bundleId = bundleId
+        self.isEnabled = isEnabled
         self._enabled = State(initialValue: isEnabled)
     }
 

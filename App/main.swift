@@ -5,6 +5,13 @@ import AppKit
 // 这样可以完全控制应用启动顺序和生命周期
 // ============================================================
 let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+
+// @MainActor 初始化需要在异步上下文中调用
+Task { @MainActor in
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.run()
+}
+
+// 保持主线程运行
+RunLoop.main.run()

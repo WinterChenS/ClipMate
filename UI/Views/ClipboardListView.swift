@@ -234,7 +234,7 @@ struct ClipboardCard: View {
                 .padding(10)
         }
         .background(Color.primary.opacity(0.02))
-        .cornerRadius(10, corners: [.topLeft, .topRight])
+        .cornerRadius(10, corners: [.layerMinXMinYCorner, .layerMaxXMinYCorner])
     }
 
     private var imagePreview: some View {
@@ -255,7 +255,7 @@ struct ClipboardCard: View {
                 }
             }
         }
-        .cornerRadius(10, corners: [.topLeft, .topRight])
+        .cornerRadius(10, corners: [.layerMinXMinYCorner, .layerMaxXMinYCorner])
     }
 
     private var filePreview: some View {
@@ -286,7 +286,7 @@ struct ClipboardCard: View {
         }
         .padding(10)
         .background(Color.primary.opacity(0.02))
-        .cornerRadius(10, corners: [.topLeft, .topRight])
+        .cornerRadius(10, corners: [.layerMinXMinYCorner, .layerMaxXMinYCorner])
     }
 
     private var unknownPreview: some View {
@@ -301,7 +301,7 @@ struct ClipboardCard: View {
                     .foregroundColor(.secondary)
             }
         }
-        .cornerRadius(10, corners: [.topLeft, .topRight])
+        .cornerRadius(10, corners: [.layerMinXMinYCorner, .layerMaxXMinYCorner])
     }
 
     // MARK: - 背景
@@ -352,20 +352,20 @@ struct ClipboardCard: View {
 // MARK: - 圆角扩展
 
 extension View {
-    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
+    func cornerRadius(_ radius: CGFloat, corners: CACornerMask) -> some View {
         clipShape(RoundedCorner(radius: radius, corners: corners))
     }
 }
 
 struct RoundedCorner: Shape {
     var radius: CGFloat = .infinity
-    var corners: UIRectCorner = .allCorners
+    var corners: CACornerMask = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
 
     func path(in rect: CGRect) -> Path {
-        let path = UIBezierPath(
+        let path = NSBezierPath(
             roundedRect: rect,
-            byRoundingCorners: corners,
-            cornerRadii: CGSize(width: radius, height: radius)
+            xRadius: radius,
+            yRadius: radius
         )
         return Path(path.cgPath)
     }

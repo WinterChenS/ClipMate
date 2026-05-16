@@ -54,6 +54,13 @@ DerivedData/
 !.env.example
 *.pem
 *.key
+*.p12
+*.pfx
+
+# Backup files
+*.bak
+*.backup
+*.orig
 
 # Logs
 *.log

@@ -289,4 +289,7 @@ extension Notification.Name {
     static let focusSearchField = Notification.Name("focusSearchField")
     static let clipboardDidChange = Notification.Name("clipboardDidChange")
     static let historyDidUpdate = Notification.Name("historyDidUpdate")
+    static let openPreferences = Notification.Name("openPreferences")
+    static let togglePanel = Notification.Name("togglePanel")
+    static let exclusionRulesDidChange = Notification.Name("exclusionRulesDidChange")
 }

@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 
 // ============================================================
 // HistoryViewModel - 历史面板数据管理
