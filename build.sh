@@ -349,8 +349,6 @@ create_app_bundle() {
     <string>${BUILD_NUMBER}</string>
     <key>LSMinimumSystemVersion</key>
     <string>${MACOS_MIN}</string>
-    <key>LSUIElement</key>
-    <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 ClipMate. All rights reserved.</string>
     <key>NSPrincipalClass</key>
