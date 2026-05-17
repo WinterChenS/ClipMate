@@ -17,6 +17,7 @@ class HistoryViewModel: ObservableObject {
     @Published var favorites: [ClipboardItem] = []
     @Published var searchQuery: String = ""
     @Published var selectedContentType: ClipboardContentType?
+    @Published var selectedPinboardId: Int64? = nil
     @Published var isLoading: Bool = false
 
     // MARK: - 属性
@@ -152,6 +153,40 @@ class HistoryViewModel: ObservableObject {
         }
     }
 
+    /// 删除收藏栏（同时级联删除 pinboard_items 关联）
+    func deletePinboard(_ pinboard: Pinboard) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            do {
+                try self.databaseManager.deletePinboard(pinboard)
+                DispatchQueue.main.async {
+                    // 如果当前正在查看被删除的 Pinboard，切回剪贴板
+                    if self.selectedPinboardId == pinboard.id {
+                        self.selectedPinboardId = nil
+                        self.pinboardItems = []
+                    }
+                    self.loadPinboards()
+                }
+            } catch {
+                print("[HistoryViewModel] 删除固定板失败: \(error)")
+            }
+        }
+    }
+
+    /// 重命名收藏栏
+    func renamePinboard(_ pinboard: Pinboard, newName: String) {
+        guard !newName.isEmpty else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            do {
+                try self.databaseManager.updatePinboard(pinboard, name: newName)
+                self.loadPinboards()
+            } catch {
+                print("[HistoryViewModel] 重命名固定板失败: \(error)")
+            }
+        }
+    }
+
     // MARK: - 收藏
 
     func loadFavorites() {
@@ -191,7 +226,15 @@ class HistoryViewModel: ObservableObject {
     func delete(_ item: ClipboardItem) {
         do {
             try databaseManager.delete(item)
+            // 刷新所有可能包含该条目的列表
             loadHistory()
+            // 如果当前正在查看某个 Pinboard，也刷新它
+            if let boardId = selectedPinboardId {
+                if let board = pinboards.first(where: { $0.id == boardId }) {
+                    loadPinboardItems(board)
+                }
+            }
+            loadPinboards()
         } catch {
             print("[HistoryViewModel] 删除失败: \(error)")
         }
@@ -211,6 +254,22 @@ class HistoryViewModel: ObservableObject {
             loadHistory()
         } catch {
             print("[HistoryViewModel] 清空历史失败: \(error)")
+        }
+    }
+
+    /// 将条目固定到指定 Pinboard
+    func pinItemToBoard(_ item: ClipboardItem, board: Pinboard) {
+        guard let itemId = item.id, let boardId = board.id else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            do {
+                try self.databaseManager.addToPinboard(pinboardId: boardId, clipboardItemId: itemId)
+                DispatchQueue.main.async {
+                    self.loadHistory()
+                }
+            } catch {
+                print("[HistoryViewModel] 固定到 Pinboard 失败: \(error)")
+            }
         }
     }
 }

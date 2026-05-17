@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 // ============================================================
 // AppDelegate - 应用生命周期、菜单栏图标、系统托盘
@@ -24,12 +25,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var preferencesWindow: NSWindow?
     /// 版本更新检查器
     private var updateChecker: UpdateChecker?
+    /// 更新检查订阅（自动检查发现更新时显示面板）
+    private var updateCheckerCancellable: AnyCancellable?
     /// 打开面板前的前台应用（用于粘贴后归还焦点）
     private var previousActiveApp: NSRunningApplication?
 
     // MARK: - 应用生命周期
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 启动时立即设为 accessory 模式（无 Dock 图标，仅菜单栏）
+        // 注意：不在 Info.plist 中设 LSUIElement，否则启动台也不显示
+        NSApp.setActivationPolicy(.accessory)
+
         do {
             databaseManager = try DatabaseManager()
             print("[ClipMate] 数据库初始化成功")
@@ -78,6 +85,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             updateChecker?.checkForUpdateIfNeeded()
         }
+
+        // 监听自动检查发现更新 → 如果面板不可见则显示面板，让 SwiftUI alert 可见
+        updateCheckerCancellable = updateChecker?.$updateAvailable
+            .removeDuplicates()
+            .filter { $0 }
+            .dropFirst() // 跳过初始值 false
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self = self, let panel = self.historyPanel, !panel.isVisible else { return }
+                    self.showHistoryPanel()
+                }
+            }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -86,6 +105,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        return true
+    }
+
+    /// 从启动台或 Dock 点击图标时，显示历史面板
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            showHistoryPanel()
+        }
         return true
     }
 
@@ -469,65 +496,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func checkForUpdates() {
         guard let checker = updateChecker else { return }
+        // 显示面板，让 SwiftUI alert 统一处理更新提示（避免同时弹出 NSAlert 和 SwiftUI alert）
+        showHistoryPanel()
         checker.forceCheck()
-        // 监听检查结果，弹窗反馈（右键菜单触发，不在设置窗口内）
-        Task { @MainActor [weak self] in
-            guard let self = self else { return }
-            // 等待检查完成
-            for _ in 0..<30 {
-                if !checker.isChecking { break }
-                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
-            }
-            let alert = NSAlert()
-            alert.window.level = .floating
-            switch checker.checkResult {
-            case .updateAvailable:
-                if let release = checker.latestRelease {
-                    alert.messageText = "发现新版本 ClipMate \(release.version)"
-                    alert.informativeText = "当前版本: \(checker.currentVersion)\n请前往关于页面下载更新。"
-                    alert.alertStyle = .informational
-                    alert.addButton(withTitle: "下载更新")
-                    alert.addButton(withTitle: "稍后")
-                    if alert.runModal() == .alertFirstButtonReturn {
-                        checker.openDownloadPage()
-                    }
-                }
-            case .upToDate:
-                alert.messageText = "ClipMate 已是最新版本"
-                alert.informativeText = "当前版本: \(checker.currentVersion)"
-                alert.alertStyle = .informational
-                alert.addButton(withTitle: "好")
-                alert.runModal()
-            case .failed:
-                alert.messageText = "检查更新失败"
-                alert.informativeText = "无法连接到服务器，请检查网络连接后重试。"
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "好")
-                alert.runModal()
-            case .idle:
-                break
-            }
-        }
     }
 
     // MARK: - 辅助功能权限检测
 
-    /// 启动时静默检测，首次无权限时弹窗引导
+    /// 启动时静默检测，仅在控制台输出日志
+    /// 不弹窗，避免与 macOS 系统弹窗冲突导致双弹窗
+    /// 底部栏已有醒目的黄色警告提示，用户可点击授权
     private func checkAccessibilityPermissionOnLaunch() {
         let trusted = AXIsProcessTrusted()
         if !trusted {
-            print("[ClipMate] ⚠️ 辅助功能权限未授予，快速粘贴功能不可用")
-            // 延迟 1s 弹窗，等应用 UI 就绪
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                self.requestAccessibilityPermission(
-                    title: "需要辅助功能权限",
-                    message: "ClipMate 需要「辅助功能」权限才能将内容快速粘贴到其他应用。\n\n"
-                        + "如果您刚覆盖安装了新版本，系统可能无法自动识别新版本。"
-                        + "请在系统设置中先删除旧的 ClipMate 条目，再重新添加。",
-                    allowRetry: false
-                )
-            }
+            print("[ClipMate] ⚠️ 辅助功能权限未授予，快速粘贴功能不可用（底部栏有提示）")
+        } else {
+            print("[ClipMate] ✓ 辅助功能权限已授予")
         }
     }
 
@@ -661,11 +645,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let response = alert.runModal()
 
         if response == .alertFirstButtonReturn {
-            // "授权并打开系统设置" → 打开系统设置 + 触发系统原生弹窗
+            // "授权并打开系统设置" → 仅打开系统设置（不触发系统原生弹窗，避免双弹窗）
             HotKeyManager.openAccessibilitySettings()
-            // 使用 AXIsProcessTrustedWithOptions 触发系统原生授权弹窗
-            // macOS 会自动匹配当前进程签名，引导用户正确添加
-            triggerSystemAccessibilityPrompt()
 
             // 如果允许重试，持续轮询权限状态直到用户授权或取消
             if allowRetry, let onGranted = onGranted {
@@ -678,7 +659,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             } else {
                 // 仍然没有权限，打开系统设置
                 HotKeyManager.openAccessibilitySettings()
-                triggerSystemAccessibilityPrompt()
                 if let onGranted = onGranted {
                     pollAccessibilityPermission(onGranted: onGranted)
                 }
@@ -687,14 +667,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // 如果面板和设置窗口都不处于显示状态，恢复 accessory 模式
         updateActivationPolicy(forWindowAction: .hide)
-    }
-
-    /// 触发 macOS 系统原生辅助功能授权弹窗
-    private nonisolated func triggerSystemAccessibilityPrompt() {
-        // 直接使用 kAXTrustedCheckOptionPrompt 的字符串值 "AXTrustedCheckOptionPrompt"
-        // 避免 Swift 6 对 kAXTrustedCheckOptionPrompt 变量的并发安全检查
-        let options: CFDictionary = ["AXTrustedCheckOptionPrompt" as CFString: true] as CFDictionary
-        AXIsProcessTrustedWithOptions(options)
     }
 
     /// 轮询权限状态，用户在系统设置中授权后自动回调

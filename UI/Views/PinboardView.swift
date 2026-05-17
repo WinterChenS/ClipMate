@@ -158,7 +158,7 @@ struct NewPinboardSheet: View {
                         .frame(width: 24, height: 24)
                         .overlay(
                             Circle()
-                                .stroke(Color.white, lineWidth: selectedColor == color ? 2 : 0)
+                                .stroke(Color.primary, lineWidth: selectedColor == color ? 2 : 0)
                         )
                         .shadow(color: selectedColor == color ? color.opacity(0.5) : .clear, radius: 4)
                         .onTapGesture {

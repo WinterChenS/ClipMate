@@ -4,159 +4,235 @@ import AppKit
 
 // ============================================================
 // HotKeyManager - 全局快捷键管理器
-// 使用 CGEventTap 实现跨应用全局快捷键
-// 注意：需要在 系统设置 > 隐私与安全性 > 辅助功能 中授权
+// 使用 Carbon RegisterEventHotKey API（最可靠，无需辅助功能权限）
 // ============================================================
 class HotKeyManager: @unchecked Sendable {
 
     /// 单例
     static let shared = HotKeyManager()
 
-    /// 快捷键回调（@MainActor 闭包）
+    /// 快捷键回调
     private var handlers: [String: @Sendable () -> Void] = [:]
 
-    /// 事件 tap
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    /// Carbon 热键注册引用（handlerKey → EventHotKeyRef）
+    private var hotKeyRefs: [String: EventHotKeyRef] = [:]
 
-    /// 是否获得辅助功能权限
-    private(set) var hasAccessibilityPermission = false
+    /// Carbon 热键 ID → handler key 的映射
+    /// 使用 Int 作为 key（将 signature 和 id 合并编码）避免 EventHotKeyID 不遵守 Hashable 的问题
+    private var hotKeyIDMap: [Int: String] = [:]
 
-    /// 防抖：上次触发时间戳（systemUptime）
+    /// 已安装的 EventHandler 引用（用于清理）
+    private var eventHandlerRef: EventHandlerRef?
+
+    /// 防抖
     private var lastTriggerTimes: [String: TimeInterval] = [:]
-
-    /// 防抖冷却间隔（秒）
     private let cooldownInterval: TimeInterval = 0.35
 
+    /// Carbon 热键 signature
+    private static let hotKeySignature: OSType = 0x434D_5401 // 'CMT\x01'
+
+    /// 实例级的自增 ID（避免 static var 并发问题）
+    private var nextID: UInt32 = 1
+
     private init() {
-        hasAccessibilityPermission = AXIsProcessTrusted()
-        if !hasAccessibilityPermission {
-            print("[HotKeyManager] ⚠️ 未获得辅助功能权限，全局快捷键将无法使用")
-            print("[HotKeyManager] 请前往 系统设置 > 隐私与安全性 > 辅助功能 添加此应用")
-        } else {
-            print("[HotKeyManager] ✓ 辅助功能权限已获取")
-        }
+        print("[HotKeyManager] 初始化完成（使用 Carbon RegisterEventHotKey API）")
     }
 
     // MARK: - 注册快捷键
 
-    /// 注册打开历史面板（默认：⌘⇧V）
     func registerShowPanel(_ handler: @escaping @Sendable () -> Void) {
         handlers["showPanel"] = handler
-        setupEventTap()
+        registerCarbonHotKey(
+            handlerKey: "showPanel",
+            keyCode: UInt32(kVK_ANSI_V),   // 0x09
+            modifiers: UInt32(cmdKey | shiftKey)
+        )
     }
 
-    /// 注册清空历史快捷键（⌘⇧Delete）
     func registerClearHistory(_ handler: @escaping @Sendable () -> Void) {
         handlers["clearHistory"] = handler
-        setupEventTap()
+        registerCarbonHotKey(
+            handlerKey: "clearHistory",
+            keyCode: UInt32(kVK_Delete),     // 0x33
+            modifiers: UInt32(cmdKey | shiftKey)
+        )
     }
 
-    /// 注册搜索快捷键
     func registerSearch(_ handler: @escaping @Sendable () -> Void) {
         handlers["search"] = handler
-        setupEventTap()
+        registerCarbonHotKey(
+            handlerKey: "search",
+            keyCode: UInt32(kVK_ANSI_F),     // 0x03
+            modifiers: UInt32(cmdKey | shiftKey)
+        )
     }
 
-    // MARK: - 事件 Tap 核心
+    // MARK: - Carbon Hot Key 注册
 
-    private func setupEventTap() {
-        guard eventTap == nil else { return }
+    /// 使用 Carbon RegisterEventHotKey 注册全局快捷键
+    /// 这是 macOS 上最可靠的全局快捷键方案：
+    /// - 不需要辅助功能权限
+    /// - 对 LSUIElement 应用完全有效
+    /// - 即使应用不在前台也能正常工作
+    private func registerCarbonHotKey(handlerKey: String, keyCode: UInt32, modifiers: UInt32) {
+        // 如果已经注册过同样的快捷键，先注销
+        if let existingRef = hotKeyRefs[handlerKey] {
+            UnregisterEventHotKey(existingRef)
+            print("[HotKeyManager] 注销旧的 \(handlerKey) 注册")
+        }
 
-        if !AXIsProcessTrusted() {
-            print("[HotKeyManager] ⚠️ 无辅助功能权限，跳过事件 Tap 创建")
+        // 确保 EventHandler 已安装（只需安装一次）
+        ensureEventHandlerInstalled()
+
+        let id = nextID
+        nextID += 1
+
+        // 使用 (signature, id) 的组合编码为 Int 作为 map key
+        let mapKey = encodeHotKeyID(signature: Self.hotKeySignature, id: id)
+        hotKeyIDMap[mapKey] = handlerKey
+
+        // 注册 Carbon 热键
+        let hotKeyID = EventHotKeyID(signature: Self.hotKeySignature, id: id)
+
+        var hotKeyRef: EventHotKeyRef?
+        let registerStatus = RegisterEventHotKey(
+            keyCode,
+            modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+
+        guard registerStatus == noErr, let ref = hotKeyRef else {
+            print("[HotKeyManager] ❌ RegisterEventHotKey 失败: \(registerStatus), handlerKey=\(handlerKey)")
+            hotKeyIDMap.removeValue(forKey: mapKey)
             return
         }
 
-        let callback: CGEventTapCallBack = { proxy, type, event, refcon in
-            guard type == .keyDown,
-                  let refcon = refcon else {
-                return Unmanaged.passUnretained(event)
-            }
-
-            let manager = Unmanaged<HotKeyManager>.fromOpaque(refcon).takeUnretainedValue()
-            return manager.handleKeyEvent(event)
-        }
-
-        let eventMask = (1 << CGEventType.keyDown.rawValue)
-
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: CGEventMask(eventMask),
-            callback: callback,
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
-            print("[HotKeyManager] ⚠️ CGEventTap 创建失败！")
-            print("[HotKeyManager] 请确保已在 系统设置 > 隐私与安全性 > 辅助功能 中授权")
-            return
-        }
-
-        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-
-        eventTap = tap
-        print("[HotKeyManager] ✓ 事件 Tap 已注册，全局快捷键已启用")
+        hotKeyRefs[handlerKey] = ref
+        let modStr = hotKeyLabel(handlerKey)
+        print("[HotKeyManager] ✓ 已注册: \(modStr) (id=\(id))")
     }
 
-    /// 处理按键事件
-    private func handleKeyEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
-        // 过滤按键重复事件（长按产生的 autorepeat）
-        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) == 1
-        if isRepeat {
-            return Unmanaged.passUnretained(event)
+    /// 确保全局 EventHandler 只安装一次
+    private func ensureEventHandlerInstalled() {
+        guard eventHandlerRef == nil else { return }
+
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+
+        var handlerRef: EventHandlerRef?
+        let status = InstallEventHandler(
+            GetApplicationEventTarget(),
+            { (_, event, userData) -> OSStatus in
+                guard let userData else { return OSStatus(eventNotHandledErr) }
+                let manager = Unmanaged<HotKeyManager>.fromOpaque(userData).takeUnretainedValue()
+                return manager.handleHotKeyEvent(event)
+            },
+            1,
+            &eventType,
+            selfPtr,
+            &handlerRef
+        )
+
+        if status == noErr, let ref = handlerRef {
+            eventHandlerRef = ref
+            print("[HotKeyManager] ✓ Carbon EventHandler 已安装")
+        } else {
+            print("[HotKeyManager] ❌ InstallEventHandler 失败: \(status)")
+        }
+    }
+
+    /// Carbon 事件处理器回调
+    private func handleHotKeyEvent(_ event: EventRef?) -> OSStatus {
+        guard let event else { return OSStatus(eventNotHandledErr) }
+
+        // 从事件中提取 HotKeyID
+        var hotKeyID = EventHotKeyID()
+        let status = GetEventParameter(
+            event,
+            UInt32(kEventParamDirectObject),
+            UInt32(typeEventHotKeyID),
+            nil,
+            MemoryLayout<EventHotKeyID>.size,
+            nil,
+            &hotKeyID
+        )
+
+        guard status == noErr else {
+            return OSStatus(eventNotHandledErr)
         }
 
-        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-        let flags = event.flags
-
-        // ⌘⇧V → 打开历史面板
-        if keyCode == 0x09 && flags.contains(.maskCommand) && flags.contains(.maskShift) {
-            // 防抖：冷却期内忽略重复触发
-            let now = ProcessInfo.processInfo.systemUptime
-            let lastTime = lastTriggerTimes["showPanel"] ?? 0
-            guard now - lastTime >= cooldownInterval else {
-                return nil // 消费事件但不触发回调
-            }
-            lastTriggerTimes["showPanel"] = now
-
-            print("[HotKeyManager] 检测到 ⌘⇧V → 触发面板")
-            DispatchQueue.main.async { [weak self] in
-                self?.handlers["showPanel"]?()
-            }
-            return nil
+        // 查找对应的 handler key
+        let mapKey = encodeHotKeyID(signature: hotKeyID.signature, id: hotKeyID.id)
+        guard let handlerKey = hotKeyIDMap[mapKey] else {
+            return OSStatus(eventNotHandledErr)
         }
 
-        // ⌘⇧Delete → 清空历史
-        if keyCode == 0x33 && flags.contains(.maskCommand) && flags.contains(.maskShift) {
-            let now = ProcessInfo.processInfo.systemUptime
-            let lastTime = lastTriggerTimes["clearHistory"] ?? 0
-            guard now - lastTime >= cooldownInterval else {
-                return nil
-            }
-            lastTriggerTimes["clearHistory"] = now
+        // 防抖检查
+        let now = ProcessInfo.processInfo.systemUptime
+        let last = lastTriggerTimes[handlerKey] ?? 0
+        guard now - last >= cooldownInterval else { return noErr }
+        lastTriggerTimes[handlerKey] = now
 
-            DispatchQueue.main.async { [weak self] in
-                self?.handlers["clearHistory"]?()
-            }
-            return nil
+        let modStr = hotKeyLabel(handlerKey)
+        print("[HotKeyManager] 检测到: \(modStr)")
+
+        // 在主线程执行回调
+        DispatchQueue.main.async { [weak self] in
+            self?.handlers[handlerKey]?()
         }
 
-        return Unmanaged.passUnretained(event)
+        return noErr
+    }
+
+    // MARK: - 辅助方法
+
+    /// 将 (signature, id) 编码为 Int，用作 Dictionary key
+    private func encodeHotKeyID(signature: OSType, id: UInt32) -> Int {
+        return (Int(signature) << 32) | Int(id)
+    }
+
+    /// 快捷键的可读标签
+    private func hotKeyLabel(_ key: String) -> String {
+        switch key {
+        case "showPanel": return "⌘⇧V"
+        case "clearHistory": return "⌘⇧Delete"
+        case "search": return "⌘⇧F"
+        default: return key
+        }
+    }
+
+    // MARK: - 权限辅助
+
+    /// 打开系统设置的辅助功能页面（保留，虽然 Carbon Hot Key 不需要此权限）
+    static func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // MARK: - 生命周期
 
     func stop() {
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
+        // 注销所有 Carbon 热键
+        for (key, ref) in hotKeyRefs {
+            UnregisterEventHotKey(ref)
+            print("[HotKeyManager] 注销热键: \(key)")
         }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        hotKeyRefs.removeAll()
+        hotKeyIDMap.removeAll()
+
+        // 移除 EventHandler
+        if let handlerRef = eventHandlerRef {
+            RemoveEventHandler(handlerRef)
+            eventHandlerRef = nil
+            print("[HotKeyManager] Carbon EventHandler 已移除")
         }
-        eventTap = nil
-        runLoopSource = nil
     }
 }

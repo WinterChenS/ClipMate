@@ -1,3 +1,5 @@
+[English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | **中文**
+
 # ClipMate - macOS 剪贴板管理器
 
 高保真复刻 macOS Paste 应用，使用纯原生 Swift 6 + SwiftUI/AppKit 开发。

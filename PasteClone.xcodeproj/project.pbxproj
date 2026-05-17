@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1B2C3D4E5F67890 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6789012 /* Assets.xcassets */; };
 		016E7D4F5D28475023FA3D24 /* ClipboardItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAD4048F3BAE665AC1AECC31 /* ClipboardItem.swift */; };
 		041D08B52137DDC055813189 /* ClipboardListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61E39620740A8130EABAF0A5 /* ClipboardListView.swift */; };
 		07CC4A95256892D18FE7F045 /* AppUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8CEC50321E9686ED67FF468 /* AppUtils.swift */; };
@@ -25,6 +26,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		B2C3D4E5F6789012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		042034449676F6C60FF25940 /* PreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesView.swift; sourceTree = "<group>"; };
 		200F25E0122F9C365A9A7DC5 /* HistoryContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryContentView.swift; sourceTree = "<group>"; };
 		271F758BD6FB0DE4B25D4CA2 /* HistoryViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryViewModel.swift; sourceTree = "<group>"; };
@@ -54,6 +56,17 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXResourcesBuildPhase section */
+		1A2B3C4D5E6F7890 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D4E5F67890 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXGroup section */
 		09253552945C3BACE5A53037 /* Storage */ = {
@@ -144,6 +157,7 @@
 		C673311B7F0BA94EB72E6F9C /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				B2C3D4E5F6789012 /* Assets.xcassets */,
 				FEF86E81E59C40ECBC806BB3 /* Info.plist */,
 				734658669BD6FFC2012933CE /* PasteClone.entitlements */,
 			);
@@ -174,6 +188,7 @@
 			buildConfigurationList = 73A78CD19C99D0D455E3757E /* Build configuration list for PBXNativeTarget "PasteClone" */;
 			buildPhases = (
 				2128E1FE50D2E7575E055B12 /* Sources */,
+				1A2B3C4D5E6F7890 /* Resources */,
 				E9A4D08DD2B4964B85C05188 /* Frameworks */,
 			);
 			buildRules = (
@@ -346,7 +361,6 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				INFOPLIST_KEY_LSUIElement = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
@@ -414,7 +428,6 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				INFOPLIST_KEY_LSUIElement = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;

@@ -5,11 +5,12 @@ import GRDB
 // DatabaseManager - GRDB 数据库管理器
 // 负责剪贴板历史、固定板、应用排除规则的持久化
 // ============================================================
-class DatabaseManager {
+final class DatabaseManager: @unchecked Sendable {
 
     // MARK: - 数据库连接
 
-    private var dbQueue: DatabaseQueue?
+    /// 数据库队列（internal 访问级别，供 CloudKitSyncManager 使用）
+    private(set) var dbQueue: DatabaseQueue?
 
     /// 数据库路径（放在 Application Support 下）
     private var databasePath: String {
@@ -156,6 +157,8 @@ class DatabaseManager {
         try db.write { db in
             try item.save(db)
         }
+        // 通知 CloudKit 同步
+        postSyncNotification(.clipboardItemDidCreate, uuid: item.uuid)
     }
 
     /// 获取所有历史记录（按时间倒序）
@@ -216,9 +219,11 @@ class DatabaseManager {
     /// 删除指定条目
     func delete(_ item: ClipboardItem) throws {
         guard let db = dbQueue, let id = item.id else { return }
+        let uuid = item.uuid
         try db.write { db in
             _ = try ClipboardItem.deleteOne(db, id: id)
         }
+        postSyncNotification(.clipboardItemDidDelete, uuid: uuid)
     }
 
     /// 清空所有历史（保留固定）
@@ -276,6 +281,7 @@ class DatabaseManager {
                 arguments: [Date(), id]
             )
         }
+        postSyncNotification(.clipboardItemDidUpdate, uuid: item.uuid)
     }
 
     /// 切换收藏状态
@@ -287,13 +293,14 @@ class DatabaseManager {
                 arguments: [Date(), id]
             )
         }
+        postSyncNotification(.clipboardItemDidUpdate, uuid: item.uuid)
     }
 
     // MARK: - CRUD: Pinboard
 
     func createPinboard(name: String, colorHex: String = "#378ADD") throws -> Pinboard {
         guard let db = dbQueue else { throw DatabaseError.notInitialized }
-        return try db.write { db in
+        let board = try db.write { db in
             var pinboard = Pinboard(
                 id: nil,
                 name: name,
@@ -304,6 +311,8 @@ class DatabaseManager {
             try pinboard.insert(db)
             return pinboard
         }
+        NotificationCenter.default.post(name: .pinboardDidCreate, object: nil)
+        return board
     }
 
     func fetchAllPinboards() throws -> [Pinboard] {
@@ -317,6 +326,17 @@ class DatabaseManager {
         guard let db = dbQueue, let id = pinboard.id else { return }
         try db.write { db in
             _ = try Pinboard.deleteOne(db, id: id)
+        }
+        NotificationCenter.default.post(name: .pinboardDidDelete, object: nil)
+    }
+
+    func updatePinboard(_ pinboard: Pinboard, name: String) throws {
+        guard let db = dbQueue, let id = pinboard.id else { return }
+        try db.write { db in
+            var updated = pinboard
+            updated.name = name
+            updated.updatedAt = Date()
+            try updated.update(db)
         }
     }
 
@@ -380,6 +400,13 @@ class DatabaseManager {
                 arguments: [id]
             )
         }
+    }
+
+    // MARK: - CloudKit 同步通知
+
+    /// 发送本地变更通知，供 CloudKitSyncManager 监听
+    private func postSyncNotification(_ name: Notification.Name, uuid: String) {
+        NotificationCenter.default.post(name: name, object: nil, userInfo: ["uuid": uuid])
     }
 }
 

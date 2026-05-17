@@ -10,6 +10,7 @@ import GRDB
 /// 内容类型枚举
 enum ClipboardContentType: String, Codable, DatabaseValueConvertible {
     case text       // 普通文本
+    case link       // 链接（URL）
     case image      // 图片
     case fileURL    // 文件/文件夹路径
     case html       // HTML 内容
@@ -149,6 +150,8 @@ struct ClipboardItem: Identifiable, Codable, FetchableRecord, PersistableRecord 
         switch contentType {
         case .text:
             return textContent ?? ""
+        case .link:
+            return textContent ?? "🔗 链接"
         case .image:
             if let w = imageWidth, let h = imageHeight {
                 return "🖼️ 图片 \(w)×\(h)"
@@ -179,6 +182,8 @@ struct ClipboardItem: Identifiable, Codable, FetchableRecord, PersistableRecord 
                 return String(singleLine.prefix(120)) + "..."
             }
             return singleLine
+        case .link:
+            return textContent ?? ""
         case .image:
             if let w = imageWidth, let h = imageHeight {
                 return "\(w) × \(h) px"
@@ -205,27 +210,30 @@ struct ClipboardItem: Identifiable, Codable, FetchableRecord, PersistableRecord 
 
     /// 从系统剪贴板读取并创建 ClipboardItem
     static func from(pasteboard: NSPasteboard, sourceApp: NSRunningApplication?) -> ClipboardItem? {
-        // 1. 优先检测图片
-        if let imageTypes = pasteboard.types?.filter({ [.tiff, .png].contains($0) }), !imageTypes.isEmpty {
-            if let data = pasteboard.data(forType: imageTypes[0]),
-               let image = NSImage(data: data) {
-                let size = image.size
-                // 压缩图片数据（超过 500KB 则压缩）
-                var imageData = data
-                if data.count > 500 * 1024 {
-                    if let tiffData = image.tiffRepresentation,
-                       let compressed = NSBitmapImageRep(data: tiffData)?
-                           .representation(using: .jpeg, properties: [.compressionFactor: 0.7]) {
-                        imageData = compressed
+        // 1. 优先检测图片（尝试所有匹配的图片类型，避免只试第一个时数据不可用）
+        let allImageTypes: [NSPasteboard.PasteboardType] = [.tiff, .png]
+        if let availableTypes = pasteboard.types {
+            for imageType in allImageTypes where availableTypes.contains(imageType) {
+                if let data = pasteboard.data(forType: imageType),
+                   let image = NSImage(data: data) {
+                    let size = image.size
+                    // 压缩图片数据（超过 500KB 则压缩）
+                    var imageData = data
+                    if data.count > 500 * 1024 {
+                        if let tiffData = image.tiffRepresentation,
+                           let compressed = NSBitmapImageRep(data: tiffData)?
+                               .representation(using: .jpeg, properties: [.compressionFactor: 0.7]) {
+                            imageData = compressed
+                        }
                     }
+                    return ClipboardItem(
+                        contentType: .image,
+                        imageData: imageData,
+                        imageWidth: Int(size.width),
+                        imageHeight: Int(size.height),
+                        sourceApp: sourceApp
+                    )
                 }
-                return ClipboardItem(
-                    contentType: .image,
-                    imageData: imageData,
-                    imageWidth: Int(size.width),
-                    imageHeight: Int(size.height),
-                    sourceApp: sourceApp
-                )
             }
         }
 
@@ -261,10 +269,11 @@ struct ClipboardItem: Identifiable, Codable, FetchableRecord, PersistableRecord 
             )
         }
 
-        // 5. 普通文本
+        // 5. 普通文本（检测是否为链接）
         if let text = pasteboard.string(forType: .string), !text.isEmpty {
+            let isLink = text.looksLikeURL
             return ClipboardItem(
-                contentType: .text,
+                contentType: isLink ? .link : .text,
                 textContent: text,
                 sourceApp: sourceApp
             )
