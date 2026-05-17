@@ -210,27 +210,30 @@ struct ClipboardItem: Identifiable, Codable, FetchableRecord, PersistableRecord 
 
     /// 从系统剪贴板读取并创建 ClipboardItem
     static func from(pasteboard: NSPasteboard, sourceApp: NSRunningApplication?) -> ClipboardItem? {
-        // 1. 优先检测图片
-        if let imageTypes = pasteboard.types?.filter({ [.tiff, .png].contains($0) }), !imageTypes.isEmpty {
-            if let data = pasteboard.data(forType: imageTypes[0]),
-               let image = NSImage(data: data) {
-                let size = image.size
-                // 压缩图片数据（超过 500KB 则压缩）
-                var imageData = data
-                if data.count > 500 * 1024 {
-                    if let tiffData = image.tiffRepresentation,
-                       let compressed = NSBitmapImageRep(data: tiffData)?
-                           .representation(using: .jpeg, properties: [.compressionFactor: 0.7]) {
-                        imageData = compressed
+        // 1. 优先检测图片（尝试所有匹配的图片类型，避免只试第一个时数据不可用）
+        let allImageTypes: [NSPasteboard.PasteboardType] = [.tiff, .png]
+        if let availableTypes = pasteboard.types {
+            for imageType in allImageTypes where availableTypes.contains(imageType) {
+                if let data = pasteboard.data(forType: imageType),
+                   let image = NSImage(data: data) {
+                    let size = image.size
+                    // 压缩图片数据（超过 500KB 则压缩）
+                    var imageData = data
+                    if data.count > 500 * 1024 {
+                        if let tiffData = image.tiffRepresentation,
+                           let compressed = NSBitmapImageRep(data: tiffData)?
+                               .representation(using: .jpeg, properties: [.compressionFactor: 0.7]) {
+                            imageData = compressed
+                        }
                     }
+                    return ClipboardItem(
+                        contentType: .image,
+                        imageData: imageData,
+                        imageWidth: Int(size.width),
+                        imageHeight: Int(size.height),
+                        sourceApp: sourceApp
+                    )
                 }
-                return ClipboardItem(
-                    contentType: .image,
-                    imageData: imageData,
-                    imageWidth: Int(size.width),
-                    imageHeight: Int(size.height),
-                    sourceApp: sourceApp
-                )
             }
         }
 

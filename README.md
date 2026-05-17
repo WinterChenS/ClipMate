@@ -2,6 +2,8 @@
 
 高保真复刻 macOS Paste 应用，使用纯原生 Swift 6 + SwiftUI/AppKit 开发。
 
+![ClipMate Preview](assets/screenshots/preview.jpg)
+
 > ✅ **无需 Xcode！** 使用 `swift build` + `build.sh` 直接编译打包，支持 Apple Silicon 和 Intel Mac。
 
 ## 功能特性
