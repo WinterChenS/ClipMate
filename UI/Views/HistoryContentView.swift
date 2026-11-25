@@ -603,6 +603,9 @@ struct HistoryContentView: View {
         case .unknown:
             break
         }
+
+        // 记录使用：把该条目「前移」到历史最前
+        viewModel.markUsed(item)
     }
 
     /// 分享条目

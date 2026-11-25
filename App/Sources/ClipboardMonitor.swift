@@ -34,10 +34,6 @@ class ClipboardMonitor {
     /// 最大历史条数（超过则清理）
     private let maxHistoryCount = 1000
 
-    /// 内容去重指纹（最近 100 条的指纹，防止连续重复记录）
-    private var recentFingerprints: [String] = []
-    private let recentFingerprintsLimit = 100
-
     /// 要排除的应用 Bundle ID 列表
     private var excludedBundleIds: Set<String> = []
 
@@ -174,17 +170,7 @@ class ClipboardMonitor {
         lastChangeCount = currentCount
         failedChangeCount = nil
 
-        // 内容去重（基于 SHA256 指纹，防止碰撞）
-        let fingerprint = item.contentFingerprint
-        if recentFingerprints.contains(fingerprint) {
-            Self.logger.debug("跳过重复内容: \(item.displayText.prefix(30))")
-            return
-        }
-        recentFingerprints.append(fingerprint)
-        if recentFingerprints.count > recentFingerprintsLimit {
-            recentFingerprints.removeFirst()
-        }
-
+        // 内容去重 + 前移：重复内容不新增记录，由数据库把已有条目推到最前
         Self.logger.debug("保存: \(item.contentType.rawValue), 来源=\(sourceApp?.localizedName ?? "nil")")
 
         // 存储到数据库
@@ -205,10 +191,14 @@ class ClipboardMonitor {
         guard let db = databaseManager else { return }
 
         do {
-            var newItem = item
-            try db.save(&newItem)
-            try db.cleanupOldItems(keepCount: maxHistoryCount)
-            Self.logger.debug("已保存到数据库, id=\(newItem.id?.description ?? "nil")")
+            let result = try db.saveOrPromote(item)
+            switch result {
+            case .inserted(let saved):
+                Self.logger.debug("已保存到数据库, id=\(saved.id?.description ?? "nil")")
+                try db.cleanupOldItems(keepCount: maxHistoryCount)
+            case .promoted(let saved):
+                Self.logger.debug("内容已存在，前移记录 id=\(saved.id?.description ?? "nil")")
+            }
         } catch {
             Self.logger.error("保存失败: \(error)")
         }
@@ -228,34 +218,3 @@ class ClipboardMonitor {
         }
     }
 }
-
-// MARK: - 内容指纹（用于去重）
-
-extension ClipboardItem {
-    /// 内容指纹（用于去重比较，使用 SHA256 防止碰撞）
-    var contentFingerprint: String {
-        switch contentType {
-        case .text, .html, .link:
-            return "t:" + Self.sha256Hex(textContent?.data(using: .utf8) ?? Data())
-        case .image:
-            return "i:" + Self.sha256Hex(imageData ?? Data())
-        case .fileURL:
-            return "f:" + Self.sha256Hex(fileURLStrings?.data(using: .utf8) ?? Data())
-        case .rtfd:
-            return "r:" + Self.sha256Hex(rtfdData ?? Data())
-        case .unknown:
-            return "u:" + UUID().uuidString
-        }
-    }
-
-    private static func sha256Hex(_ data: Data) -> String {
-        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        data.withUnsafeBytes { ptr in
-            _ = CC_SHA256(ptr.baseAddress, CC_LONG(data.count), &hash)
-        }
-        return hash.map { String(format: "%02x", $0) }.joined()
-    }
-}
-
-// CommonCrypto 桥接
-import CommonCrypto

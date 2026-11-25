@@ -16,6 +16,11 @@ let package = Package(
         .package(url: "https://github.com/groue/GRDB.swift", from: "6.24.0"),
     ],
     targets: [
+        .testTarget(
+            name: "AppTests",
+            dependencies: ["App"],
+            path: "Tests/AppTests"
+        ),
         .executableTarget(
             name: "App",
             dependencies: [

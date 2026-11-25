@@ -243,6 +243,8 @@ class HistoryViewModel: ObservableObject {
     func markUsed(_ item: ClipboardItem) {
         do {
             try databaseManager.markUsed(item)
+            // 使用后条目前移，立即刷新列表
+            loadHistory()
         } catch {
             print("[HistoryViewModel] 标记使用失败: \(error)")
         }

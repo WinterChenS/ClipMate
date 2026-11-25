@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import GRDB
+import CommonCrypto
 
 // ============================================================
 // ClipboardItem - 剪贴板条目数据模型
@@ -82,6 +83,8 @@ struct ClipboardItem: Identifiable, Codable, FetchableRecord, PersistableRecord 
     var updatedAt: Date
     var lastUsedAt: Date?            // 最后使用时间
     var useCount: Int                // 使用次数
+    var contentHash: String?         // 内容指纹（SHA256），用于重复内容去重
+    var lastCopiedAt: Date?          // 最后一次复制/使用的时间（历史排序依据）
 
     static let databaseTableName = "clipboard_items"
 
@@ -127,6 +130,52 @@ struct ClipboardItem: Identifiable, Codable, FetchableRecord, PersistableRecord 
         self.updatedAt = Date()
         self.lastUsedAt = nil
         self.useCount = 0
+        self.contentHash = nil
+        self.lastCopiedAt = nil
+    }
+
+    /// 插入前自动补全指纹与排序时间（同步导入等直接 insert 的路径也不会漏）
+    mutating func willInsert(_ db: Database) throws {
+        if contentHash == nil {
+            contentHash = computeContentHash()
+        }
+        if lastCopiedAt == nil {
+            lastCopiedAt = createdAt
+        }
+    }
+
+    // MARK: - 内容指纹
+
+    /// 内容指纹：内容相同则指纹相同，用于「重复内容前移」
+    /// 返回 nil 表示无法安全比较（例如缺少二进制数据），这类条目不参与去重
+    func computeContentHash() -> String? {
+        switch contentType {
+        case .text, .link:
+            guard let text = textContent, !text.isEmpty else { return nil }
+            return "t:" + Self.sha256Hex(Data(text.utf8))
+        case .html:
+            guard let html = htmlContent ?? textContent, !html.isEmpty else { return nil }
+            return "h:" + Self.sha256Hex(Data(html.utf8))
+        case .image:
+            guard let data = imageData, !data.isEmpty else { return nil }
+            return "i:" + Self.sha256Hex(data)
+        case .fileURL:
+            guard let paths = fileURLStrings, !paths.isEmpty else { return nil }
+            return "f:" + Self.sha256Hex(Data(paths.utf8))
+        case .rtfd:
+            guard let data = rtfdData, !data.isEmpty else { return nil }
+            return "r:" + Self.sha256Hex(data)
+        case .unknown:
+            return nil
+        }
+    }
+
+    static func sha256Hex(_ data: Data) -> String {
+        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        data.withUnsafeBytes { ptr in
+            _ = CC_SHA256(ptr.baseAddress, CC_LONG(data.count), &hash)
+        }
+        return hash.map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - 辅助方法
@@ -199,11 +248,11 @@ struct ClipboardItem: Identifiable, Codable, FetchableRecord, PersistableRecord 
         }
     }
 
-    /// 时间友好的显示格式
+    /// 时间友好的显示格式（按「最后一次复制/使用」计算，重复复制后显示刚刚）
     var timeAgo: String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: createdAt, relativeTo: Date())
+        return formatter.localizedString(for: lastCopiedAt ?? createdAt, relativeTo: Date())
     }
 
     // MARK: - 从 NSPasteboard 创建 ClipboardItem

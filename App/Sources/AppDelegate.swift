@@ -348,6 +348,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
 
+        // 记录使用：把该条目「前移」到历史最前（重复内容不再新增卡片）
+        try? databaseManager?.markUsed(item)
+        NotificationCenter.default.post(name: .clipboardDidChange, object: item)
+
         // 粘贴操作：立即隐藏面板并归还焦点
         hidePanelImmediately()
 
@@ -386,6 +390,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !plainText.isEmpty else { return }
 
         pasteboard.setString(plainText, forType: .string)
+
+        // 记录使用：把该条目「前移」到历史最前
+        try? databaseManager?.markUsed(item)
+        NotificationCenter.default.post(name: .clipboardDidChange, object: item)
+
         hidePanelImmediately()
 
         Task { @MainActor in

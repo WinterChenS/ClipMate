@@ -12,8 +12,17 @@ final class DatabaseManager: @unchecked Sendable {
     /// 数据库队列（internal 访问级别，供 CloudKitSyncManager 使用）
     private(set) var dbQueue: DatabaseQueue?
 
+    /// 自定义数据库路径（测试用；nil 表示 Application Support 下的默认位置）
+    private let customDatabasePath: String?
+
     /// 数据库路径（放在 Application Support 下）
     private var databasePath: String {
+        if let customDatabasePath {
+            let parent = URL(fileURLWithPath: customDatabasePath).deletingLastPathComponent()
+            try? FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+            return customDatabasePath
+        }
+
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -33,17 +42,19 @@ final class DatabaseManager: @unchecked Sendable {
 
     // MARK: - 初始化
 
-    init() throws {
+    init(databasePath: String? = nil) throws {
+        self.customDatabasePath = databasePath
+
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.readonly = false
 
-        dbQueue = try DatabaseQueue(path: databasePath, configuration: config)
+        dbQueue = try DatabaseQueue(path: self.databasePath, configuration: config)
 
         try migrate()
         try seedDefaultData()
 
-        print("[DatabaseManager] 数据库路径: \(databasePath)")
+        print("[DatabaseManager] 数据库路径: \(self.databasePath)")
     }
 
     // MARK: - 数据库迁移
@@ -123,6 +134,25 @@ final class DatabaseManager: @unchecked Sendable {
             try db.create(index: "idx_clipboard_type", on: "clipboard_items", columns: ["contentType"])
         }
 
+        // v2: 重复内容前移 —— 增加内容指纹与「最后复制时间」，历史排序改用复制时间
+        migrator.registerMigration("v2_dedupe_recency") { db in
+            try db.alter(table: "clipboard_items") { t in
+                t.add(column: "contentHash", .text)
+                t.add(column: "lastCopiedAt", .datetime)
+            }
+
+            try db.create(index: "idx_clipboard_hash", on: "clipboard_items", columns: ["contentHash"])
+            try db.create(index: "idx_clipboard_last_copied", on: "clipboard_items", columns: ["lastCopiedAt"])
+
+            // 回填已有记录：指纹用于之后的去重；时间保持原有顺序，不改变当前卡片顺序
+            let existing = try ClipboardItem.fetchAll(db)
+            for var item in existing {
+                item.contentHash = item.computeContentHash()
+                item.lastCopiedAt = item.lastUsedAt ?? item.createdAt
+                try item.update(db)
+            }
+        }
+
         try migrator.migrate(db)
     }
 
@@ -151,25 +181,69 @@ final class DatabaseManager: @unchecked Sendable {
 
     // MARK: - CRUD: ClipboardItem
 
-    /// 保存剪贴板条目
-    func save(_ item: inout ClipboardItem) throws {
-        guard let db = dbQueue else { return }
-        try db.write { db in
-            try item.save(db)
+    /// 保存剪贴板条目：内容重复则不新增记录，改为把已有条目「前移」到历史最前
+    @discardableResult
+    func saveOrPromote(_ item: ClipboardItem) throws -> SaveResult {
+        guard let db = dbQueue else { throw DatabaseError.notInitialized }
+
+        let result = try db.write { db -> SaveResult in
+            let now = Date()
+            let hash = item.computeContentHash()
+
+            // 历史里已有相同内容 → 刷最后一次复制时间即可（useCount 不算一次「使用」）
+            if let hash, var existing = try ClipboardItem
+                .filter(Column("contentHash") == hash)
+                .order(sql: "id DESC")
+                .fetchOne(db) {
+                existing.lastCopiedAt = try nextRecencyTimestamp(db)
+                existing.updatedAt = now
+                if let bundleId = item.sourceAppBundleId { existing.sourceAppBundleId = bundleId }
+                if let name = item.sourceAppName { existing.sourceAppName = name }
+                try existing.update(db)
+                return .promoted(existing)
+            }
+
+            var newItem = item
+            newItem.contentHash = hash
+            newItem.lastCopiedAt = try nextRecencyTimestamp(db)
+            try newItem.insert(db)
+            return .inserted(newItem)
         }
-        // 通知 CloudKit 同步
-        postSyncNotification(.clipboardItemDidCreate, uuid: item.uuid)
+
+        switch result {
+        case .inserted(let saved):
+            postSyncNotification(.clipboardItemDidCreate, uuid: saved.uuid)
+        case .promoted(let saved):
+            postSyncNotification(.clipboardItemDidUpdate, uuid: saved.uuid)
+        }
+        return result
     }
 
-    /// 获取所有历史记录（按时间倒序）
+    /// 获取所有历史记录（按最后复制时间倒序）
     func fetchHistory(limit: Int = 100) throws -> [ClipboardItem] {
         guard let db = dbQueue else { return [] }
         return try db.read { db in
             try ClipboardItem
-                .order(Column("createdAt").desc)
+                .order(sql: Self.recencyOrderSQL)
                 .limit(limit)
                 .fetchAll(db)
         }
+    }
+
+    /// 按「最后复制时间」倒序的排序子句（旧数据没有 lastCopiedAt 时回退到 createdAt）
+    private static let recencyOrderSQL = "COALESCE(lastCopiedAt, createdAt) DESC, id DESC"
+
+    /// 生成严格递增的「最后复制时间」
+    /// 数据库时间精度是毫秒，同毫秒内连续复制/粘贴会导致卡片顺序错乱，
+    /// 所以保证新时间戳永远大于当前最大值
+    private func nextRecencyTimestamp(_ db: Database) throws -> Date {
+        let now = Date()
+        let latest = try Date.fetchOne(
+            db,
+            sql: "SELECT lastCopiedAt FROM clipboard_items WHERE lastCopiedAt IS NOT NULL ORDER BY lastCopiedAt DESC LIMIT 1"
+        )
+        guard let latest else { return now }
+        return max(now, latest.addingTimeInterval(0.001))
     }
 
     /// 获取固定条目
@@ -178,7 +252,7 @@ final class DatabaseManager: @unchecked Sendable {
         return try db.read { db in
             try ClipboardItem
                 .filter(Column("isPinned") == true)
-                .order(Column("createdAt").desc)
+                .order(sql: Self.recencyOrderSQL)
                 .fetchAll(db)
         }
     }
@@ -197,7 +271,7 @@ final class DatabaseManager: @unchecked Sendable {
                 FROM clipboard_items
                 JOIN clipboard_items_fts ON clipboard_items.rowid = clipboard_items_fts.rowid
                 WHERE clipboard_items_fts MATCH ?
-                ORDER BY clipboard_items.createdAt DESC
+                ORDER BY COALESCE(clipboard_items.lastCopiedAt, clipboard_items.createdAt) DESC, clipboard_items.id DESC
                 LIMIT ?
                 """
             return try ClipboardItem.fetchAll(db, sql: sql, arguments: [pattern?.rawPattern ?? query, limit])
@@ -210,7 +284,7 @@ final class DatabaseManager: @unchecked Sendable {
         return try db.read { db in
             try ClipboardItem
                 .filter(Column("contentType") == type.rawValue)
-                .order(Column("createdAt").desc)
+                .order(sql: Self.recencyOrderSQL)
                 .limit(limit)
                 .fetchAll(db)
         }
@@ -244,7 +318,7 @@ final class DatabaseManager: @unchecked Sendable {
             let pinnedRows = try Row.fetchAll(db, sql: "SELECT id FROM clipboard_items WHERE isPinned = 1")
             let keepIds = pinnedRows.compactMap { $0["id"] as Int64? }
 
-            let recentRows = try Row.fetchAll(db, sql: "SELECT id FROM clipboard_items ORDER BY createdAt DESC LIMIT \(keepCount)")
+            let recentRows = try Row.fetchAll(db, sql: "SELECT id FROM clipboard_items ORDER BY COALESCE(lastCopiedAt, createdAt) DESC LIMIT \(keepCount)")
             let recentIds = recentRows.compactMap { $0["id"] as Int64? }
 
             let allKeepIds = Set(keepIds + recentIds)
@@ -257,17 +331,19 @@ final class DatabaseManager: @unchecked Sendable {
         }
     }
 
-    /// 标记使用（更新 lastUsedAt 和 useCount）
+    /// 标记使用（从历史复制/粘贴）：记录使用次数并把条目「前移」到历史最前
     func markUsed(_ item: ClipboardItem) throws {
         guard let db = dbQueue, let id = item.id else { return }
+        let now = Date()
         try db.write { db in
+            let recency = try nextRecencyTimestamp(db)
             try db.execute(
                 sql: """
                     UPDATE clipboard_items
-                    SET lastUsedAt = ?, useCount = useCount + 1, updatedAt = ?
+                    SET lastUsedAt = ?, lastCopiedAt = ?, useCount = useCount + 1, updatedAt = ?
                     WHERE id = ?
                     """,
-                arguments: [Date(), Date(), id]
+                arguments: [now, recency, now, id]
             )
         }
     }
@@ -356,7 +432,7 @@ final class DatabaseManager: @unchecked Sendable {
                 FROM clipboard_items
                 JOIN pinboard_items ON clipboard_items.id = pinboard_items.clipboardItemId
                 WHERE pinboard_items.pinboardId = ?
-                ORDER BY clipboard_items.createdAt DESC
+                ORDER BY COALESCE(clipboard_items.lastCopiedAt, clipboard_items.createdAt) DESC, clipboard_items.id DESC
                 """
             return try ClipboardItem.fetchAll(db, sql: sql, arguments: [pinboardId])
         }
@@ -411,6 +487,23 @@ final class DatabaseManager: @unchecked Sendable {
 }
 
 // MARK: - 数据库错误
+
+/// 保存结果：新插入 / 命中已有内容并前移
+enum SaveResult {
+    case inserted(ClipboardItem)
+    case promoted(ClipboardItem)
+
+    var item: ClipboardItem {
+        switch self {
+        case .inserted(let item), .promoted(let item): return item
+        }
+    }
+
+    var isPromoted: Bool {
+        if case .promoted = self { return true }
+        return false
+    }
+}
 
 enum DatabaseError: Error {
     case notInitialized
